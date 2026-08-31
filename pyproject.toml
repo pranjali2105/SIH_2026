@@ -1,0 +1,26 @@
+[project]
+name = "gnss-denied-nav"
+version = "0.1.0"
+description = "Vehicle displacement prediction from smartphone IMU for GNSS-denied navigation (IO-VNBD)"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
+    "pyproj",
+    "vincenty",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+# Loose analysis scripts under src/ are modules, not packages.
+py-modules = ["inspect_schema", "sweep_corpus"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

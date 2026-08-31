@@ -1,0 +1,180 @@
+"""Multi-task loss for the displacement model.
+
+    total = 1.0 * gaussian_nll(displacement)
+          + 0.5 * bce(stationary)
+          + 0.2 * mae(yaw_rate, valid windows only)
+          + 0.1 * smoothness(|mu_t - mu_{t-1}| within a session)
+
+Two things here are load-bearing rather than cosmetic:
+
+* **`pos_weight` on the stationary BCE.** Stationary windows are only 3.3-6.2%
+  of each split. Unweighted BCE is minimised by predicting "moving" everywhere,
+  which scores ~95% accuracy and learns nothing. The weight is the measured
+  negative/positive ratio.
+* **The smoothness term is session-scoped.** Consecutive windows overlap by 9 s
+  and are 1 s apart, so their displacements really are near-continuous — but
+  only within one session. Applied across a session boundary it would penalise
+  a discontinuity that physically exists.
+"""
+
+from __future__ import annotations
+
+import torch
+import torch.nn.functional as F
+
+from .resnet1d import LOGVAR_MAX, LOGVAR_MIN
+
+W_DISPLACEMENT = 1.0
+W_STATIONARY = 0.5
+W_YAW = 0.2
+W_SMOOTHNESS = 0.1
+
+
+def gaussian_nll(mu: torch.Tensor, logvar: torch.Tensor,
+                 target: torch.Tensor,
+                 weights: torch.Tensor | None = None) -> torch.Tensor:
+    """Negative log-likelihood of a Gaussian with predicted variance.
+
+    0.5 * (logvar + (y - mu)^2 / exp(logvar)), constant dropped. The model can
+    down-weight windows it cannot predict, but `logvar` is clamped so it cannot
+    escape the loss entirely by declaring everything uncertain.
+    """
+    logvar = logvar.clamp(LOGVAR_MIN, LOGVAR_MAX)
+    inv_var = torch.exp(-logvar)
+    per_sample = 0.5 * (logvar + (target - mu) ** 2 * inv_var)
+    if weights is None:
+        return per_sample.mean()
+    # Weighted mean, normalised by the weights so the loss scale — and hence
+    # the balance against the other three task terms — does not shift.
+    w = weights.to(per_sample.dtype)
+    return (per_sample * w).sum() / w.sum().clamp_min(1e-8)
+
+
+def stationary_bce(logit: torch.Tensor, target: torch.Tensor,
+                   pos_weight: torch.Tensor | float | None = None
+                   ) -> torch.Tensor:
+    """BCE for the stationary head, with positive-class up-weighting."""
+    target = target.float()
+    if pos_weight is None:
+        pw = None
+    elif isinstance(pos_weight, torch.Tensor):
+        pw = pos_weight.to(logit.device, logit.dtype)
+    else:
+        pw = torch.as_tensor(float(pos_weight), device=logit.device,
+                             dtype=logit.dtype)
+    return F.binary_cross_entropy_with_logits(logit, target, pos_weight=pw)
+
+
+def compute_pos_weight(is_stationary) -> float:
+    """negatives / positives, the standard BCE positive-class weight.
+
+    Returns 1.0 if a batch happens to contain no positives, so a single
+    unlucky batch cannot produce an infinite weight.
+    """
+    t = torch.as_tensor(is_stationary).float()
+    pos = float(t.sum())
+    neg = float(t.numel() - pos)
+    return neg / pos if pos > 0 else 1.0
+
+
+def yaw_rate_mae(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """MAE over valid windows only.
+
+    The true yaw rate is NaN below 5 m/s, where GPS heading is meaningless.
+    Those windows are dropped rather than filled: a zero fill would teach the
+    model that slow driving means no rotation.
+    """
+    valid = torch.isfinite(target)
+    if not bool(valid.any()):
+        return pred.sum() * 0.0        # keeps the graph, contributes nothing
+    return (pred[valid] - target[valid]).abs().mean()
+
+
+def smoothness(mu: torch.Tensor, session_id: torch.Tensor,
+               t0: torch.Tensor | None = None,
+               max_gap_s: float = 1.5) -> torch.Tensor:
+    """Mean |mu_t - mu_{t-1}| over consecutive windows of the SAME session.
+
+    Requires the batch to be in session/time order. Pairs spanning a session
+    change are dropped; if `t0` is given, so are pairs separated by more than
+    `max_gap_s`, which would otherwise link windows across a gap where the
+    displacement genuinely jumps.
+    """
+    if mu.numel() < 2:
+        return mu.sum() * 0.0
+    same = session_id[1:] == session_id[:-1]
+    if t0 is not None:
+        same = same & ((t0[1:] - t0[:-1]) <= max_gap_s) & ((t0[1:] - t0[:-1]) > 0)
+    if not bool(same.any()):
+        return mu.sum() * 0.0
+    return (mu[1:] - mu[:-1]).abs()[same].mean()
+
+
+def multitask_loss(outputs: dict[str, torch.Tensor],
+                   targets: dict[str, torch.Tensor],
+                   pos_weight: torch.Tensor | float | None = None,
+                   weights: dict[str, float] | None = None) -> dict[str, torch.Tensor]:
+    """All four terms plus the weighted total.
+
+    Returns every component so training logs show which task is moving,
+    rather than a single number that hides a collapsed head.
+    """
+    w = {"displacement": W_DISPLACEMENT, "stationary": W_STATIONARY,
+         "yaw": W_YAW, "smoothness": W_SMOOTHNESS}
+    if weights:
+        w.update(weights)
+
+    l_disp = gaussian_nll(outputs["mu"], outputs["logvar"],
+                          targets["displacement"], targets.get("weight"))
+    l_stat = stationary_bce(outputs["stationary_logit"],
+                            targets["is_stationary"], pos_weight)
+    l_yaw = yaw_rate_mae(outputs["yaw_rate"], targets["yaw_rate"])
+    l_smooth = smoothness(outputs["mu"], targets["session_id"],
+                          targets.get("t0"))
+
+    total = (w["displacement"] * l_disp + w["stationary"] * l_stat
+             + w["yaw"] * l_yaw + w["smoothness"] * l_smooth)
+    return {"total": total, "displacement": l_disp, "stationary": l_stat,
+            "yaw": l_yaw, "smoothness": l_smooth}
+
+
+def test_shapes(batch: int = 16, verbose: bool = True) -> dict:
+    """Random batch through model + loss, asserting shapes and finiteness."""
+    from .resnet1d import IN_CHANNELS, WINDOW_SAMPLES, ResNet1D
+
+    torch.manual_seed(0)
+    model = ResNet1D()
+    x = torch.randn(batch, IN_CHANNELS, WINDOW_SAMPLES)
+    out = model(x)
+
+    yaw_target = torch.randn(batch)
+    yaw_target[::3] = float("nan")          # exercise the valid-only path
+    stationary = (torch.rand(batch) < 0.05).float()
+    targets = {
+        "displacement": torch.rand(batch) * 30.0,
+        "is_stationary": stationary,
+        "yaw_rate": yaw_target,
+        "session_id": torch.tensor([0] * (batch // 2) + [1] * (batch - batch // 2)),
+        "t0": torch.arange(batch, dtype=torch.float32),
+    }
+    losses = multitask_loss(out, targets,
+                            pos_weight=compute_pos_weight(stationary))
+    for name, value in losses.items():
+        assert value.shape == (), f"{name} should be scalar, got {tuple(value.shape)}"
+        assert torch.isfinite(value), f"{name} is not finite"
+    losses["total"].backward()
+    assert any(p.grad is not None and torch.isfinite(p.grad).all()
+               for p in model.parameters()), "no finite gradients"
+
+    if verbose:
+        print(f"batch {batch}, stationary positives "
+              f"{int(stationary.sum())}/{batch}, "
+              f"pos_weight {compute_pos_weight(stationary):.2f}")
+        for name, value in losses.items():
+            print(f"  {name:<14}{value.item():+.4f}")
+        print("  backward pass OK, gradients finite")
+    return losses
+
+
+if __name__ == "__main__":
+    test_shapes()

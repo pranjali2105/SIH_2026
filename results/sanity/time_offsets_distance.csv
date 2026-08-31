@@ -1,0 +1,188 @@
+session,role,group,best_lag_ms,residual,n_samples_used,method,note
+S-A4,excluded,A,,,0,distance,no time column
+S-I,ood_spotcheck,I,,,0,distance,no usable GPS fixes
+S-A1,robustness_2hz,A,5000.0,0.08450200393259331,29061,distance,
+S-A10,robustness_2hz,A,0.0,0.03250163536782652,44230,distance,
+S-A11,robustness_2hz,A,5000.0,0.04456722530968459,25451,distance,
+S-A12,robustness_2hz,A,5000.0,0.033926094086445265,23225,distance,
+S-A13,robustness_2hz,A,-5000.0,0.38346477560075054,45910,distance,
+S-A2,robustness_2hz,A,-5000.0,0.009590466927368643,57195,distance,
+S-A3,robustness_2hz,A,-5000.0,0.13182333260359178,55521,distance,
+S-A9,robustness_2hz,A,5000.0,0.11470079508124659,59430,distance,
+V-M,stage0_only,M,5000.0,0.08718941089549549,105972,distance,
+V-S1,stage0_only,S,-5000.0,0.024725912552837362,51745,distance,
+V-S2,stage0_only,S,5000.0,0.03197360694860952,93875,distance,
+V-S3a,stage0_only,S,-5000.0,0.09738504719320143,24620,distance,
+V-S3b,stage0_only,S,5000.0,0.05784093790151925,6812,distance,
+V-S3c,stage0_only,S,5000.0,0.0428958193639889,37182,distance,
+V-S4,stage0_only,S,5000.0,0.0720648294413776,94600,distance,
+V-St1,stage0_only,St,-5000.0,0.0275601460506077,57212,distance,
+V-St4,stage0_only,St,-5000.0,0.04777113458175561,13590,distance,
+V-St6,stage0_only,St,-5000.0,0.1600204109516141,51360,distance,
+V-St7,stage0_only,St,5000.0,0.13931733937249394,45098,distance,
+V-Vfa01,stage0_only,Vfa,-5000.0,0.09990180510090826,11535,distance,
+V-Vfa02,stage0_only,Vfa,-5000.0,0.09236820225126827,67755,distance,
+V-Vfb01a,stage0_only,Vfb,5000.0,0.10135970849845052,17000,distance,
+V-Vfb01b,stage0_only,Vfb,5000.0,0.0797341103855892,3880,distance,
+V-Vfb01c,stage0_only,Vfb,-5000.0,0.15561707759566498,6320,distance,
+V-Vfb01d,stage0_only,Vfb,5000.0,0.19410963809238052,10713,distance,
+V-Vfb02a,stage0_only,Vfb,5000.0,0.05968128529501532,35960,distance,
+V-Vfb02b,stage0_only,Vfb,-5000.0,0.0846988141598328,11000,distance,
+V-Vfb02c,stage0_only,Vfb,-5000.0,0.08761646932238341,640,distance,
+V-Vfb02d,stage0_only,Vfb,-5000.0,0.17962431638120738,880,distance,
+V-Vfb02e,stage0_only,Vfb,4900.0,0.028495009594409464,980,distance,
+V-Vfb02f,stage0_only,Vfb,0.0,0.03323228002086033,660,distance,
+V-Vfb02g,stage0_only,Vfb,-5000.0,0.09984756577697498,27159,distance,
+V-vta10,stage0_only,Vta,-5000.0,0.09718136649434078,1501,distance,
+V-vta11,stage0_only,Vta,,,0,distance,under 60 s of GPS coverage
+V-vta12,stage0_only,Vta,5000.0,0.058168327506056515,610,distance,
+V-vta13,stage0_only,Vta,,,0,distance,under 60 s of GPS coverage
+V-vta14,stage0_only,Vta,-1100.0,0.027024829587849655,2884,distance,
+V-vta15,stage0_only,Vta,900.0,0.028959775788815156,832,distance,
+V-vta16,stage0_only,Vta,-5000.0,0.06397850625086672,11335,distance,
+V-vta17,stage0_only,Vta,5000.0,0.033548052156318314,4518,distance,
+V-Vta18,stage0_only,Vta,,,0,distance,under 60 s of GPS coverage
+V-vta19,stage0_only,Vta,,,0,distance,under 60 s of GPS coverage
+V-Vta1a,stage0_only,Vta,-5000.0,0.05871006071627752,25675,distance,
+V-Vta1b,stage0_only,Vta,-5000.0,0.05524418188038856,952,distance,
+V-vta2,stage0_only,Vta,-5000.0,0.05189727090412408,10990,distance,
+V-vta20,stage0_only,Vta,5000.0,0.18973582922441024,3222,distance,
+V-vta21,stage0_only,Vta,-5000.0,0.07186751246921545,2079,distance,
+V-vta22,stage0_only,Vta,5000.0,0.08346886630803055,1564,distance,
+V-vta23,stage0_only,Vta,1200.0,0.047152501553872884,1110,distance,
+V-vta24,stage0_only,Vta,-5000.0,0.08195012078310424,1170,distance,
+V-vta25,stage0_only,Vta,-4500.0,0.11238357601992224,645,distance,
+V-vta26,stage0_only,Vta,-5000.0,0.15485733200028315,1935,distance,
+V-vta27,stage0_only,Vta,-5000.0,0.06564702643642911,2539,distance,
+V-vta28,stage0_only,Vta,5000.0,0.05160219363449872,4209,distance,
+V-vta29,stage0_only,Vta,5000.0,0.08318970208155256,23705,distance,
+V-vta3,stage0_only,Vta,5000.0,0.09535975443602243,645,distance,
+V-vta30,stage0_only,Vta,-5000.0,0.10752798923906239,17135,distance,
+V-vta4,stage0_only,Vta,5000.0,0.027330636306262483,1789,distance,
+V-vta5,stage0_only,Vta,,,0,distance,under 60 s of GPS coverage
+V-vta6,stage0_only,Vta,5000.0,0.04247236854135274,1375,distance,
+V-vta7,stage0_only,Vta,-5000.0,0.047382732589691307,840,distance,
+V-vta8,stage0_only,Vta,5000.0,0.11664628222642164,3675,distance,
+V-vta9,stage0_only,Vta,,,0,distance,under 60 s of GPS coverage
+V-vtb1,stage0_only,Vtb,-5000.0,0.023333840238012802,32458,distance,
+V-vtb10,stage0_only,Vtb,,,0,distance,under 60 s of GPS coverage
+V-vtb11,stage0_only,Vtb,,,0,distance,under 60 s of GPS coverage
+V-vtb12,stage0_only,Vtb,,,0,distance,under 60 s of GPS coverage
+V-Vtb13,stage0_only,Vtb,-3600.0,0.041328079730022206,1244,distance,
+V-vtb2,stage0_only,Vtb,-5000.0,0.17747148937946905,5711,distance,
+V-vtb3,stage0_only,Vtb,-5000.0,0.10606118062348747,8240,distance,
+V-vtb4,stage0_only,Vtb,,,0,distance,under 60 s of GPS coverage
+V-vtb5,stage0_only,Vtb,5000.0,0.13185451161153966,64388,distance,
+V-vtb6,stage0_only,Vtb,,,0,distance,under 60 s of GPS coverage
+V-vtb7,stage0_only,Vtb,,,0,distance,under 60 s of GPS coverage
+V-vtb8,stage0_only,Vtb,-5000.0,0.03405201450658101,667,distance,
+V-vtb9,stage0_only,Vtb,,,0,distance,under 60 s of GPS coverage
+V-Vw1,stage0_only,Vw,-5000.0,0.006820335110153959,20475,distance,
+V-Vw10,stage0_only,Vw,-2300.0,0.024323637093771444,651,distance,
+V-Vw11,stage0_only,Vw,5000.0,0.1273144761495782,4909,distance,
+V-Vw12,stage0_only,Vw,-5000.0,0.05450116681186167,918,distance,
+V-Vw13,stage0_only,Vw,,,0,distance,under 60 s of GPS coverage
+V-Vw14a,stage0_only,Vw,1600.0,0.027732127805923563,3138,distance,
+V-Vw14b,stage0_only,Vw,-5000.0,0.07929689143674688,19588,distance,
+V-Vw14c,stage0_only,Vw,-5000.0,0.09099480601728464,15825,distance,
+V-Vw15,stage0_only,Vw,5000.0,0.04575142796347285,1390,distance,
+V-Vw16a,stage0_only,Vw,5000.0,0.0846960333357038,5878,distance,
+V-Vw16b,stage0_only,Vw,-5000.0,0.1402104469347953,1125,distance,
+V-Vw17,stage0_only,Vw,,,0,distance,under 60 s of GPS coverage
+V-Vw2,stage0_only,Vw,5000.0,0.1045798310678043,52711,distance,
+V-Vw3,stage0_only,Vw,-1900.0,0.035469812531656805,3860,distance,
+V-Vw4,stage0_only,Vw,0.0,0.09763283004352985,126527,distance,
+V-Vw5,stage0_only,Vw,-4500.0,0.023642386135077912,1011,distance,
+V-Vw6,stage0_only,Vw,-3100.0,0.038029533423128516,1280,distance,
+V-Vw7,stage0_only,Vw,-1700.0,0.01775278282845965,1601,distance,
+V-Vw8,stage0_only,Vw,0.0,0.026173049752475627,1529,distance,
+V-Vw9,stage0_only,Vw,,,0,distance,under 60 s of GPS coverage
+V-Y1,stage0_only,Y,-5000.0,0.07643870502427083,76668,distance,
+V-Y2,stage0_only,Y,-5000.0,0.0275601460506077,57212,distance,
+S-A5,test,A,5000.0,0.05888164326703993,85008,distance,
+S-A6,test,A,-5000.0,0.060189910364921564,84656,distance,
+S-A7,test,A,5000.0,0.024790206001951386,43794,distance,
+S-A8,test,A,-5000.0,0.052742818683893765,66331,distance,
+S-M,train,M,5000.0,0.19010206677415512,61351,distance,
+S-S1,train,S,-5000.0,0.015003002990405908,51660,distance,
+S-S2,train,S,5000.0,0.02775040597556553,91887,distance,
+S-S3a,train,S,-5000.0,0.0861320420576267,24540,distance,
+S-S3b,train,S,-5000.0,0.3034278857307359,26790,distance,
+S-S3c,train,S,-5000.0,0.03997318440095382,37100,distance,
+S-S4,train,S,-5000.0,0.4515489715152926,55724,distance,
+S-Vfa01,train,Vfa,-5000.0,0.09113451683813073,11410,distance,
+S-Vfa02,train,Vfa,-5000.0,0.03343710266515406,67476,distance,
+S-Vta10,train,Vta,600.0,0.02201560831004179,1440,distance,
+S-Vta11,train,Vta,,,0,distance,no usable GPS fixes
+S-Vta12,train,Vta,,,0,distance,no usable GPS fixes
+S-Vta13,train,Vta,,,0,distance,no usable GPS fixes
+S-Vta14,train,Vta,-5000.0,0.033788367109384425,2879,distance,
+S-Vta15,train,Vta,-600.0,0.03131070217829704,786,distance,
+S-Vta16,train,Vta,-5000.0,0.05756903364168074,11268,distance,
+S-Vta17,train,Vta,5000.0,0.03231059793702022,4450,distance,
+S-Vta19,train,Vta,,,0,distance,no usable GPS fixes
+S-Vta1a,train,Vta,-5000.0,0.05905451525985743,25671,distance,
+S-Vta1b,train,Vta,-5000.0,0.019642416957580556,950,distance,
+S-Vta2,train,Vta,-5000.0,0.03517893484382481,10961,distance,
+S-Vta20,train,Vta,5000.0,0.09358364979321558,3196,distance,
+S-Vta21,train,Vta,-3600.0,0.032749579175746155,2042,distance,
+S-Vta22,train,Vta,5000.0,0.03533775620297466,1485,distance,
+S-Vta23,train,Vta,-3000.0,0.024548345695932373,1062,distance,
+S-Vta24,train,Vta,-1800.0,0.0366292624631041,984,distance,
+S-Vta25,train,Vta,,,0,distance,no usable GPS fixes
+S-Vta26,train,Vta,800.0,0.02540509807356671,1913,distance,
+S-Vta27,train,Vta,-1400.0,0.016589802496886,2476,distance,
+S-Vta28,train,Vta,2600.0,0.01719334357850279,3994,distance,
+S-Vta29,train,Vta,5000.0,0.0716292826231768,23651,distance,
+S-Vta3,train,Vta,,,0,distance,no usable GPS fixes
+S-Vta30,train,Vta,-5000.0,0.06364593538888953,17132,distance,
+S-Vta4,train,Vta,5000.0,0.01687646701623138,1780,distance,
+S-Vta5,train,Vta,,,0,distance,no usable GPS fixes
+S-Vta6,train,Vta,-800.0,0.024155570738202552,1334,distance,
+S-Vta7,train,Vta,-4400.0,0.03202129361963631,802,distance,
+S-Vta8,train,Vta,5000.0,0.04953124661845036,3601,distance,
+S-Vta9,train,Vta,,,0,distance,no usable GPS fixes
+S-Vtb1,train,Vtb,5000.0,0.07409383750920852,32383,distance,
+S-Vtb10,train,Vtb,,,0,distance,no usable GPS fixes
+S-Vtb11,train,Vtb,,,0,distance,no usable GPS fixes
+S-Vtb12,train,Vtb,,,0,distance,no usable GPS fixes
+S-Vtb2,train,Vtb,-5000.0,0.09068289762848597,5629,distance,
+S-Vtb3,train,Vtb,-5000.0,0.2075618042717136,8187,distance,
+S-Vtb4,train,Vtb,,,0,distance,no usable GPS fixes
+S-Vtb5,train,Vtb,5000.0,0.09069363382776709,64364,distance,
+S-Vtb6,train,Vtb,,,0,distance,no usable GPS fixes
+S-Vtb7,train,Vtb,,,0,distance,no usable GPS fixes
+S-Vtb8,train,Vtb,,,0,distance,no usable GPS fixes
+S-Vtb9,train,Vtb,,,0,distance,no usable GPS fixes
+S-Vw1,train,Vw,,,0,distance,no usable GPS fixes
+S-Vw10,train,Vw,,,0,distance,no usable GPS fixes
+S-Vw11,train,Vw,5000.0,0.09097194103274482,4825,distance,
+S-Vw12,train,Vw,0.0,0.038832988269632114,859,distance,
+S-Vw13,train,Vw,,,0,distance,no usable GPS fixes
+S-Vw14a,train,Vw,-5000.0,0.02717035809369301,3100,distance,
+S-Vw14b,train,Vw,-5000.0,0.0423367917396088,19581,distance,
+S-Vw14c,train,Vw,0.0,0.05813788125611984,15610,distance,
+S-Vw15,train,Vw,,,0,distance,no usable GPS fixes
+S-Vw16a,train,Vw,5000.0,0.03155217028336466,5843,distance,
+S-Vw16b,train,Vw,-5000.0,0.04888346509014386,1081,distance,
+S-Vw17,train,Vw,,,0,distance,no usable GPS fixes
+S-Vw2,train,Vw,5000.0,0.05275573964569289,52662,distance,
+S-Vw3,train,Vw,-2300.0,0.019761723579002227,3661,distance,
+S-Vw4,train,Vw,-5000.0,0.05305469607067186,126489,distance,
+S-Vw5,train,Vw,-600.0,0.015438105393164217,961,distance,
+S-Vw6,train,Vw,5000.0,0.0237622344360812,1252,distance,
+S-Vw7,train,Vw,100.0,0.010338420554333715,1530,distance,
+S-Vw8,train,Vw,-800.0,0.013377630564657543,1440,distance,
+S-Vw9,train,Vw,,,0,distance,no usable GPS fixes
+S-Y1,train,Y,-5000.0,0.05652557274793694,66731,distance,
+S-T1,validate,T,0.0,0.101892575037488,7332,distance,
+S-T10,validate,T,-5000.0,0.14456935531223236,6675,distance,
+S-T11,validate,T,5000.0,0.019574998178930023,5488,distance,
+S-T2,validate,T,5000.0,0.09713931492193706,75467,distance,
+S-T3,validate,T,-5000.0,0.07764864629477608,64631,distance,
+S-T4,validate,T,5000.0,0.15547082530085937,35689,distance,
+S-T5,validate,T,5000.0,0.018234896216367112,20294,distance,
+S-T6,validate,T,-5000.0,0.049631815675257276,25026,distance,
+S-T7,validate,T,-5000.0,0.03846505030323634,101441,distance,
+S-T8,validate,T,5000.0,0.16289877045522017,48324,distance,
+S-T9,validate,T,-5000.0,0.1193127375346258,79900,distance,
