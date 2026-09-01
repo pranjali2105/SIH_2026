@@ -26,8 +26,14 @@ from .resnet1d import LOGVAR_MAX, LOGVAR_MIN
 
 W_DISPLACEMENT = 1.0
 W_STATIONARY = 0.5
+W_PHYSICS = 0.3
 W_YAW = 0.2
 W_SMOOTHNESS = 0.1
+
+# Sample interval of the per-timestep sequences. The window is 10 Hz, so
+# dt = 0.1 s. Using dt = 1.0 would state that consecutive samples are a second
+# apart and inflate the acceleration term tenfold.
+PHYSICS_DT = 0.1
 
 
 def gaussian_nll(mu: torch.Tensor, logvar: torch.Tensor,
@@ -77,6 +83,28 @@ def compute_pos_weight(is_stationary) -> float:
     return neg / pos if pos > 0 else 1.0
 
 
+def physics_penalty(v_pred_seq: torch.Tensor, a_pred_seq: torch.Tensor,
+                    dt: float = PHYSICS_DT) -> torch.Tensor:
+    """Kinematic consistency: v[t+1] should equal v[t] + a[t]*dt.
+
+    IMPORTANT -- why acceleration is a SEPARATE head. If `a_pred_seq` were the
+    finite difference of `v_pred_seq`, this residual would be identically zero
+    by construction:
+
+        v[1:] - (v[:-1] + ((v[1:] - v[:-1]) / dt) * dt) == 0
+
+    and the term would silently contribute nothing to the loss. The penalty
+    only carries information when velocity and acceleration are predicted
+    INDEPENDENTLY, so it constrains two separate outputs to agree with
+    kinematics. `TCNModel` therefore exposes `v_seq` and `a_seq` as distinct
+    heads, and this is asserted in tests.
+    """
+    if v_pred_seq.shape[-1] < 2:
+        return v_pred_seq.sum() * 0.0
+    residual = v_pred_seq[:, 1:] - (v_pred_seq[:, :-1] + a_pred_seq[:, :-1] * dt)
+    return (residual ** 2).mean()
+
+
 def yaw_rate_mae(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """MAE over valid windows only.
 
@@ -120,7 +148,7 @@ def multitask_loss(outputs: dict[str, torch.Tensor],
     rather than a single number that hides a collapsed head.
     """
     w = {"displacement": W_DISPLACEMENT, "stationary": W_STATIONARY,
-         "yaw": W_YAW, "smoothness": W_SMOOTHNESS}
+         "physics": W_PHYSICS, "yaw": W_YAW, "smoothness": W_SMOOTHNESS}
     if weights:
         w.update(weights)
 
@@ -131,11 +159,16 @@ def multitask_loss(outputs: dict[str, torch.Tensor],
     l_yaw = yaw_rate_mae(outputs["yaw_rate"], targets["yaw_rate"])
     l_smooth = smoothness(outputs["mu"], targets["session_id"],
                           targets.get("t0"))
+    if "v_seq" in outputs and "a_seq" in outputs:
+        l_phys = physics_penalty(outputs["v_seq"], outputs["a_seq"])
+    else:
+        l_phys = l_disp.new_zeros(())
 
     total = (w["displacement"] * l_disp + w["stationary"] * l_stat
-             + w["yaw"] * l_yaw + w["smoothness"] * l_smooth)
+             + w["physics"] * l_phys + w["yaw"] * l_yaw
+             + w["smoothness"] * l_smooth)
     return {"total": total, "displacement": l_disp, "stationary": l_stat,
-            "yaw": l_yaw, "smoothness": l_smooth}
+            "physics": l_phys, "yaw": l_yaw, "smoothness": l_smooth}
 
 
 def test_shapes(batch: int = 16, verbose: bool = True) -> dict:

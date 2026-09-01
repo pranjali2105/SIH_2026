@@ -7,7 +7,37 @@ positive ones.
 
 ---
 
-## 0. Headline result
+## 0. Final model: `tcn_physics_3s`
+
+CNN stem + 4-block causal dilated TCN, 3-second window, physics-consistency
+term, bucket-weighted loss. **78,982 parameters -- 49x smaller than the
+ResNet it replaces.**
+
+| metric (test) | TCN | best ResNet | unweighted ResNet |
+|---|---|---|---|
+| 60 s drift | **579.4 m** | 612.5 m | 648.6 m |
+| 60 s drift, oracle heading | **214.1 m** | 249.5 m | 294.9 m |
+| bucket-mean MAE | **7.17** | 7.27 | 8.39 |
+| parameters | **78,982** | 965,636 | 3,848,196 |
+
+With heading supplied it reaches **214.1 m against constant-velocity DR's
+285.4 m -- 25% better than the baseline**, where the original ResNet only
+reached parity.
+
+**Caveat, stated plainly.** The drift gap over the ResNet variants is **not
+cleanly resolved at these sample sizes**: test is 4 sessions and 417 outages,
+and the per-epoch drift standard error during training was +-54 m on 66
+outages. 579.4 vs 612.5 is inside that. What supports the choice is that three
+independent measures move the same way -- drift, bucket-mean MAE, and a 49x
+parameter reduction -- not any one of them alone.
+
+The physics term itself contributes little: 0.0085 at the final epoch, ~0.1%
+of total loss. It is correctly computed and non-degenerate (§10) but is not
+doing the work; the gain is from architecture and window size.
+
+---
+
+## 0b. Headline result
 
 60-second GNSS outage, test split (4 sessions, 417 outages), mean position
 drift:
@@ -207,6 +237,108 @@ traceback** — indistinguishable from success to anything checking return
 codes. `KMP_DUPLICATE_LIB_OK=TRUE` does not help; import order is the only
 fix, and it is pinned with comments in `feature_probe.py` and
 `final_scoring.py`.
+
+---
+
+## 7b. Validate's high-speed failure is a domain gap, not a model defect
+
+**Bucket reweighting was tested and disconfirmed.** Five configurations —
+including a 49x-smaller, architecturally distinct TCN — all leave validate's
+`>25` bucket with **fraction-negative exactly 1.00**: every single outage
+under-predicts.
+
+| run | params | val `>25` CAE | frac neg |
+|---|---|---|---|
+| resnet_unweighted | 3.85 M | -953.6 | **1.00** |
+| resnet_w_base (weighted) | 3.85 M | -809.5 | **1.00** |
+| resnet_w_narrow | 0.97 M | -959.9 | **1.00** |
+| resnet_w_short_3s | 3.85 M | -852.8 | **1.00** |
+| tcn_physics_3s | 0.08 M | -915.1 | **1.00** |
+
+Inverse-frequency weighting put 1.851x weight on that bucket and did not shift
+the sign structure at all. **The cause is not loss balance or model capacity.**
+
+**Two checks localise it.**
+
+*Not a small number of bad sessions.* All five validate sessions with
+high-speed windows fail identically — S-T2 (n=89, CAE -1055), S-T3 (35,
+-1098), S-T7 (104, -728), S-T8 (47, -828), S-T9 (67, -986), every one at
+fraction-negative 1.00, across 342 of 598 outages. No clustering by session or
+by stretch, so this survives the T1/T4/T5/T6 exclusion rather than being a
+remnant of it.
+
+*It is a sensor-domain gap.* Mean per-window std of the VERTICAL accelerometer
+channel, by speed bucket:
+
+| split | 0-5 | 5-15 | 15-25 | >25 |
+|---|---|---|---|---|
+| train | 0.245 | 0.626 | 0.873 | **0.894** (rising) |
+| test | 0.296 | 0.527 | 0.654 | **0.660** (rising) |
+| validate | 0.154 | 0.525 | 0.376 | **0.327** (FALLING) |
+
+**Train and test rise monotonically with speed; validate inverts.** Its fast
+windows are quieter than its mid-speed ones. Since the model's primary cue is
+vibration texture scaling with speed (§3, and the feature-probe mechanism
+test), a regime where that relationship reverses will be under-predicted by
+any model trained on train — which is exactly what all five show.
+
+The effect is confined to the vertical axis. At `>25`, validate/test channel
+ratios are **acc_z 0.496**, acc_x 1.013, acc_y 1.017. Validate's gyro is also
+much quieter (0.010 vs test 0.025, train 0.171). Different vehicle, phone and
+road surface: the Renault Megane / Moto G7 Power on French motorway does not
+generate the signal the model relies on.
+
+**Consequence for reading our numbers:** validate is not a harder version of
+the same problem, it is a different sensor domain. Test is the split to judge
+on, and validate's absolute figures should not be compared with test's.
+
+### Removing the vertical channel is not a fix — it is much worse
+
+Tested directly: retrain the best configuration with `acc_z` zeroed after
+normalisation, in BOTH training and inference (a mask applied to only one
+would be a silent train/inference mismatch). Everything else identical.
+
+| metric | TCN (with acc_z) | TCN (acc_z removed) |
+|---|---|---|
+| validate `>25` CAE | -915.1 | **-1340.4** (worse) |
+| validate `>25` fraction negative | 1.00 | **1.00** (unchanged) |
+| validate bucket-mean MAE | 8.71 | 12.30 |
+| test bucket-mean MAE | 7.17 | 12.64 |
+| test 60 s drift | 579.4 | 1084.1 |
+| test 60 s drift, oracle heading | 214.1 | 1041.0 |
+
+**Both failure conditions are met**: the fraction-negative did not move off
+1.00, and displacement accuracy degraded severely everywhere else — test
+bucket-mean MAE nearly doubles, and drift under oracle heading goes from
+beating the baseline (214.1 vs 285.4) to almost 4x worse.
+
+This is strong confirmation of the mechanism rather than a null result. The
+vertical channel is not an incidental cue the model could route around: it is
+**the dominant signal**, and removing it roughly doubles error on every split.
+Validate's problem is not that the model uses a bad feature — it is that the
+best available feature is domain-dependent.
+
+**Recorded as a limitation, not a defect.** There is no in-corpus fix: the
+signal the task depends on genuinely behaves differently on that
+vehicle/phone/surface combination. Addressing it needs either training data
+spanning more surface types, or a cue that does not rely on vibration
+amplitude.
+
+### This generalises the 2 Hz aliasing result
+
+The feature-probe mechanism test (§5) showed the probe's advantage collapsing
+at 2 Hz, where a 1 Hz Nyquist limit removes high-frequency vertical content.
+That was read as a SAMPLING-RATE limitation. Validate shows the same cue
+failing at full 10 Hz.
+
+**So the vibration channel is not merely sampling-rate-limited -- it is
+surface- and vehicle-dependent.** The model's dominant learned cue is
+vibration texture correlating with speed. That relationship holds across most
+vehicle/road combinations in this corpus, but fails on the Renault Megane /
+Moto G7 Power / French-motorway pairing, where fast driving does not produce
+proportional vertical vibration. Any deployment on an unseen vehicle, phone or
+road surface inherits this risk, and it will not be visible in a
+same-domain validation score.
 
 ---
 

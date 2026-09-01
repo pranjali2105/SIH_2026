@@ -51,6 +51,9 @@ exact byte count.
 | feature probes | `python -m baseline.feature_probe` | `results/feature_probe.*` |
 | training | `python -m train` | `results/training/` |
 | final scoring | `python -m eval.final_scoring` | `results/final_scoring.*` |
+| offline map (setup) | `python -m mapmatch.build_map` | `data/osm/` |
+| map matching | `python -m eval.mapmatch_eval` | `results/mapmatch.*` |
+| map ablations | `python -m eval.mapmatch_ablation` | `results/mapmatch_ablation.*` |
 | figure | `python -m eval.make_figure` | `results/figures/` |
 
 ## Layout
@@ -60,9 +63,30 @@ src/data/      loading, splits, sanity checks, windowing
 src/baseline/  INS dead reckoning, constant-velocity DR, feature probes
 src/model/     1-D ResNet, multi-task losses, calibration
 src/fusion/    non-holonomic ESKF (attempted; see findings §8)
+src/mapmatch/  offline OSRM extract, road graph, along-road tracker
 src/eval/      outage harness, metrics, speed-bucket reporting
-tests/         86 tests
+tests/         109 tests
 ```
+
+## Offline map matching
+
+`src/mapmatch/` tracks the vehicle *along a road polyline* instead of
+integrating heading, which is what caps the drift: heading error cannot
+accumulate when heading is read off the map, so only distance error does.
+
+Setup is one command and needs the network once:
+
+```bash
+brew install osrm-backend osmium-tool
+python -m mapmatch.build_map      # ~660 MB of Geofabrik county extracts
+```
+
+It derives the bounding box from the four Volvo test sessions, selects the UK
+county extracts that intersect it *from Geofabrik's published region index*
+rather than a hand-written list, crops, and runs the OSRM MLD pipeline.
+Afterwards nothing touches the network: `osrm-routed` is a child process bound
+to 127.0.0.1, and a non-loopback host raises `OfflineViolation` rather than
+being used.
 
 ## Notes for anyone picking this up
 

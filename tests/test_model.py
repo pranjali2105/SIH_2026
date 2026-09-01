@@ -146,8 +146,8 @@ def test_smoothness_ignores_time_gaps():
 def test_multitask_loss_reports_every_component():
     from model.losses import test_shapes
     losses = test_shapes(batch=8, verbose=False)
-    assert set(losses) == {"total", "displacement", "stationary", "yaw",
-                           "smoothness"}
+    assert set(losses) == {"total", "displacement", "stationary", "physics",
+                           "yaw", "smoothness"}
     for v in losses.values():
         assert torch.isfinite(v)
 
@@ -162,3 +162,68 @@ def test_loss_weights_are_applied():
     base = multitask_loss(out, tgt)
     zeroed = multitask_loss(out, tgt, weights={"stationary": 0.0})
     assert zeroed["total"] < base["total"]
+
+
+# -- TCN + physics loss ----------------------------------------------------
+
+def test_tcn_output_shapes_and_causality():
+    from model.tcn_model import test_shapes
+    out = test_shapes(batch=4, verbose=False)
+    assert out["v_seq"].shape == (4, 30)
+    assert (out["v_seq"] >= 0).all()
+
+
+def test_physics_penalty_is_degenerate_for_finite_difference_acceleration():
+    """The exact trap the separate acceleration head exists to avoid.
+
+    If acceleration is the finite difference of velocity, the kinematic
+    residual is zero by construction and the term contributes nothing.
+    """
+    from model.losses import PHYSICS_DT, physics_penalty
+    v = torch.rand(4, 30) * 20
+    a = torch.zeros_like(v)
+    a[:, :-1] = (v[:, 1:] - v[:, :-1]) / PHYSICS_DT
+    assert physics_penalty(v, a).item() < 1e-9
+
+
+def test_physics_penalty_is_informative_for_independent_heads():
+    from model.losses import physics_penalty
+    v = torch.rand(4, 30) * 20
+    a = torch.randn(4, 30)
+    assert physics_penalty(v, a).item() > 1.0
+
+
+def test_physics_penalty_zero_on_consistent_trajectory():
+    from model.losses import PHYSICS_DT, physics_penalty
+    a = torch.randn(4, 30)
+    v = torch.zeros(4, 30)
+    for t in range(1, 30):
+        v[:, t] = v[:, t - 1] + a[:, t - 1] * PHYSICS_DT
+    assert physics_penalty(v, a).item() < 1e-9
+
+
+def test_multitask_loss_includes_physics_when_sequences_present():
+    from model.losses import multitask_loss
+    B = 8
+    out = {"mu": torch.rand(B), "logvar": torch.zeros(B),
+           "stationary_logit": torch.zeros(B), "yaw_rate": torch.zeros(B),
+           "v_seq": torch.rand(B, 30), "a_seq": torch.randn(B, 30)}
+    tgt = {"displacement": torch.rand(B), "is_stationary": torch.zeros(B),
+           "yaw_rate": torch.full((B,), float("nan")),
+           "session_id": torch.zeros(B, dtype=torch.long),
+           "t0": torch.arange(B, dtype=torch.float32)}
+    losses = multitask_loss(out, tgt)
+    assert "physics" in losses and losses["physics"].item() > 0
+
+
+def test_multitask_loss_omits_physics_for_resnet_outputs():
+    """The ResNet has no sequence heads; the term must degrade to zero."""
+    from model.losses import multitask_loss
+    B = 8
+    out = {"mu": torch.rand(B), "logvar": torch.zeros(B),
+           "stationary_logit": torch.zeros(B), "yaw_rate": torch.zeros(B)}
+    tgt = {"displacement": torch.rand(B), "is_stationary": torch.zeros(B),
+           "yaw_rate": torch.full((B,), float("nan")),
+           "session_id": torch.zeros(B, dtype=torch.long),
+           "t0": torch.arange(B, dtype=torch.float32)}
+    assert multitask_loss(out, tgt)["physics"].item() == 0.0

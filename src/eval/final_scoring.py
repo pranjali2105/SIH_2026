@@ -49,8 +49,16 @@ ROLES = ("validate", "test")
 
 
 def load_model(path: Path, device: str):
+    """Rebuild whichever architecture the checkpoint was trained with."""
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    model = ResNet1D().to(device)
+    cfg = ckpt.get("config", {})
+    widths = tuple(cfg.get("widths", (64, 128, 256, 512)))
+    if cfg.get("arch") == "tcn":
+        from model.tcn_model import TCNModel
+        model = TCNModel(stem_width=cfg.get("stem_width", 64),
+                         channels=widths).to(device)
+    else:
+        model = ResNet1D(widths=widths).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, ckpt

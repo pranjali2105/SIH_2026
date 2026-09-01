@@ -65,6 +65,16 @@ class Config:
     # sample is FIXED across epochs so the stopping signal is comparable.
     drift_max_outages: int = 90
     bucket_weighting: bool = False
+    widths: tuple = (64, 128, 256, 512)
+    window_samples: int = 100
+    arch: str = "resnet"          # "resnet" | "tcn"
+    stem_width: int = 64
+    # Channel indices to suppress in the input, by position in
+    # data.windows.CHANNELS = (acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z).
+    # Index 2 is the vertical accelerometer -- the vibration-texture cue whose
+    # relationship to speed INVERTS on validate (findings.md 7b).
+    drop_channels: tuple = ()
+    drop_scale: float = 0.0       # 0 = zero out; e.g. 0.25 = down-weight
     device: str = "cpu"
 
 
@@ -152,6 +162,10 @@ class WindowDataset(Dataset):
         if self.augment:
             w = self._augment(w)
         w = (w - self.mean) / self.std
+        if self.cfg.drop_channels:
+            w = w.copy()
+            for c in self.cfg.drop_channels:
+                w[:, c] *= self.cfg.drop_scale
         return {
             "x": torch.from_numpy(np.ascontiguousarray(w.T)),   # (6, T)
             "displacement": torch.tensor(self.y[i]),
@@ -213,7 +227,9 @@ class ModelPredictor:
     def __init__(self, model, session, stats, device="cpu", zupt: bool = True,
                  batch_size: int = 1024, calibration=None,
                  heading_source: str = "model",
-                 conjunction_zupt: bool = False):
+                 conjunction_zupt: bool = False,
+                 window_samples: int | None = None,
+                 drop_channels: tuple = (), drop_scale: float = 0.0):
         """heading_source: "model" uses the yaw head; "gyro" integrates the raw
         levelled gyro z-axis instead, which ablates the head entirely."""
         from data.windows import GRID_HZ, WINDOW_SAMPLES, levelled_channels
@@ -229,10 +245,15 @@ class ModelPredictor:
         # Requiring agreement with three independent physical signals brings
         # it to 4.1% at precision 0.661, and to 0.70% on motorway windows.
         self.conjunction_zupt = conjunction_zupt
+        # Must match training exactly, or the model sees a channel at
+        # inference that it never saw during training.
+        self.drop_channels = tuple(drop_channels)
+        self.drop_scale = float(drop_scale)
         self.calibration = calibration
         self.mean = np.asarray(stats["mean"], dtype=np.float32)
         self.std = np.asarray(stats["std"], dtype=np.float32)
-        self.hz, self.win = GRID_HZ, WINDOW_SAMPLES
+        self.hz = GRID_HZ
+        self.win = int(window_samples or WINDOW_SAMPLES)
         gps = gps_cumulative_distance(session)
         lo, hi = float(gps[0].min()), float(gps[0].max())
         self.grid = np.arange(lo, hi, 1.0 / GRID_HZ)
@@ -268,6 +289,9 @@ class ModelPredictor:
             sel = idx[lo:lo + self.batch_size]
             block = np.stack([self.chan[s:s + self.win] for s in flat_starts[sel]])
             block = (block - self.mean) / self.std
+            if self.drop_channels:
+                for c in self.drop_channels:
+                    block[:, :, c] *= self.drop_scale
             x = torch.from_numpy(
                 np.ascontiguousarray(block.transpose(0, 2, 1).astype(np.float32)))
             out = self.model(x.to(self.device))
@@ -379,7 +403,10 @@ def validation_drift(model, sessions, stats, cfg: Config) -> tuple[float, float,
     for name, starts in _drift_plan(sessions, cfg):
         try:
             s = load_session(name, check_rate=False)
-            pred = ModelPredictor(model, s, stats, cfg.device)
+            pred = ModelPredictor(model, s, stats, cfg.device,
+                                  window_samples=cfg.window_samples,
+                                  drop_channels=cfg.drop_channels,
+                                  drop_scale=cfg.drop_scale)
         except Exception as exc:
             print(f"    drift eval failed on {name}: {exc}", file=sys.stderr)
             continue
@@ -415,19 +442,36 @@ def main(argv=None) -> int:
     ap.add_argument("--no-augment", action="store_true")
     ap.add_argument("--bucket-weighting", action="store_true",
                     help="inverse-frequency weighting of the displacement loss")
+    ap.add_argument("--widths", default="64,128,256,512",
+                    help="per-stage channel widths")
+    ap.add_argument("--window-samples", type=int, default=100,
+                    help="input window length in samples at 10 Hz")
+    ap.add_argument("--arch", default="resnet", choices=("resnet", "tcn"))
+    ap.add_argument("--stem-width", type=int, default=64)
+    ap.add_argument("--drop-channels", default="",
+                    help="comma-separated channel indices to suppress, "
+                         "e.g. '2' for the vertical accelerometer")
+    ap.add_argument("--drop-scale", type=float, default=0.0,
+                    help="scale applied to dropped channels (0 = zero out)")
     ap.add_argument("--limit-train-batches", type=int, default=0,
                     help="debug: cap batches per epoch")
     args = ap.parse_args(argv)
 
     cfg = Config(epochs=args.epochs, warmup_epochs=args.warmup_epochs,
                  batch_size=args.batch_size, lr=args.lr, device=args.device,
-                 bucket_weighting=args.bucket_weighting)
+                 bucket_weighting=args.bucket_weighting,
+                 widths=tuple(int(w) for w in args.widths.split(",")),
+                 window_samples=args.window_samples,
+                 arch=args.arch, stem_width=args.stem_width,
+                 drop_channels=tuple(int(c) for c in args.drop_channels.split(",")
+                                     if c.strip()),
+                 drop_scale=args.drop_scale)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
     print("building windows...", file=sys.stderr)
-    built, failures = build_all()
-    verify_no_leakage(built)
+    built, failures = build_all(window_samples=cfg.window_samples)
+    verify_no_leakage(built, expected_samples=cfg.window_samples)
     train_b = [b for b in built if b.role == "train"]
     val_b = [b for b in built if b.role == "validate"]
     stats = fit_normalisation(train_b)
@@ -447,7 +491,17 @@ def main(argv=None) -> int:
             print(f"  {b:<7} n={d['n']:<7} weight {d['weight']:.3f}",
                   file=sys.stderr)
 
-    model = ResNet1D().to(cfg.device)
+    if cfg.arch == "tcn":
+        from model.tcn_model import TCNModel
+        model = TCNModel(stem_width=cfg.stem_width,
+                         channels=cfg.widths).to(cfg.device)
+    else:
+        model = ResNet1D(widths=cfg.widths).to(cfg.device)
+    n_par = sum(p.numel() for p in model.parameters())
+    print(f"widths {cfg.widths}, window {cfg.window_samples} samples "
+          f"({cfg.window_samples / 10:g} s), {n_par:,} parameters "
+          f"[{cfg.arch}]",
+          file=sys.stderr)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
                             weight_decay=cfg.weight_decay)
     total_epochs = cfg.warmup_epochs + cfg.epochs
