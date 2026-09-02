@@ -75,6 +75,7 @@ class Config:
     # relationship to speed INVERTS on validate (findings.md 7b).
     drop_channels: tuple = ()
     drop_scale: float = 0.0       # 0 = zero out; e.g. 0.25 = down-weight
+    despike: bool = False
     device: str = "cpu"
 
 
@@ -229,7 +230,8 @@ class ModelPredictor:
                  heading_source: str = "model",
                  conjunction_zupt: bool = False,
                  window_samples: int | None = None,
-                 drop_channels: tuple = (), drop_scale: float = 0.0):
+                 drop_channels: tuple = (), drop_scale: float = 0.0,
+                 despike_input: bool = False):
         """heading_source: "model" uses the yaw head; "gyro" integrates the raw
         levelled gyro z-axis instead, which ablates the head entirely."""
         from data.windows import GRID_HZ, WINDOW_SAMPLES, levelled_channels
@@ -258,6 +260,13 @@ class ModelPredictor:
         lo, hi = float(gps[0].min()), float(gps[0].max())
         self.grid = np.arange(lo, hi, 1.0 / GRID_HZ)
         self.chan = levelled_channels(session, self.grid)
+        # Inference must see the same preprocessing as training, or the model
+        # is evaluated on a distribution it was never fitted to.
+        if despike_input and self.chan is not None:
+            from data.windows import despike as _despike
+            hz = (session.hz_tick if np.isfinite(session.hz_tick)
+                  and session.hz_tick > 0 else GRID_HZ)
+            self.chan, _ = _despike(self.chan, hz)
         col = _find(session.df, r"^HEADING") or _find(session.df, r"GPS ORIENTATION")
         self.heading = (np.radians(np.interp(
             self.grid,
@@ -451,6 +460,8 @@ def main(argv=None) -> int:
     ap.add_argument("--drop-channels", default="",
                     help="comma-separated channel indices to suppress, "
                          "e.g. '2' for the vertical accelerometer")
+    ap.add_argument("--despike", action="store_true",
+                    help="rolling-median/MAD despiking before windowing")
     ap.add_argument("--drop-scale", type=float, default=0.0,
                     help="scale applied to dropped channels (0 = zero out)")
     ap.add_argument("--limit-train-batches", type=int, default=0,
@@ -465,12 +476,13 @@ def main(argv=None) -> int:
                  arch=args.arch, stem_width=args.stem_width,
                  drop_channels=tuple(int(c) for c in args.drop_channels.split(",")
                                      if c.strip()),
-                 drop_scale=args.drop_scale)
+                 drop_scale=args.drop_scale, despike=args.despike)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
     print("building windows...", file=sys.stderr)
-    built, failures = build_all(window_samples=cfg.window_samples)
+    built, failures = build_all(window_samples=cfg.window_samples,
+                                apply_despike=cfg.despike)
     verify_no_leakage(built, expected_samples=cfg.window_samples)
     train_b = [b for b in built if b.role == "train"]
     val_b = [b for b in built if b.role == "validate"]

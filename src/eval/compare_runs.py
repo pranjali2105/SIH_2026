@@ -31,6 +31,7 @@ RUNS = {
     "resnet_w_short_3s": "results/run_w_short/best.pt",
     "tcn_physics_3s": "results/run_tcn/best.pt",
     "tcn_no_accz": "results/run_tcn_noz/best.pt",
+    "tcn_despike": "results/run_tcn_despike/best.pt",
 }
 
 
@@ -45,7 +46,8 @@ def windowed_metrics(model, ckpt, device):
     sd = np.asarray(stats["std"], np.float32)
     out = {}
     for role in ("validate", "test"):
-        built, _ = build_all(roles=(role,), window_samples=win)
+        built, _ = build_all(roles=(role,), window_samples=win,
+                             apply_despike=bool(cfg.get("despike", False)))
         X = np.concatenate([b.X for b in built])
         y = np.concatenate([b.y for b in built])
         preds = []
@@ -79,7 +81,8 @@ def drift_metrics(model, ckpt, device):
                                   zupt=True, heading_source="gyro",
                                   conjunction_zupt=True, window_samples=win,
                                   drop_channels=tuple(cfg.get("drop_channels", ())),
-                                  drop_scale=float(cfg.get("drop_scale", 0.0)))
+                                  drop_scale=float(cfg.get("drop_scale", 0.0)),
+                                  despike_input=bool(cfg.get("despike", False)))
         except Exception as exc:
             print(f"  skip {name}: {exc}", file=sys.stderr)
             continue

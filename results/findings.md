@@ -324,6 +324,58 @@ vehicle/phone/surface combination. Addressing it needs either training data
 spanning more surface types, or a cue that does not rely on vibration
 amplitude.
 
+---
+
+## 7c. Despiking: robustness pass, did not move the result
+
+Rolling-median / MAD despiking applied per channel after the level-frame
+rotation and before windowing, window derived from each session's measured
+`hz_tick` rather than a hardcoded rate. Identical filtering applied at
+inference.
+
+| metric | TCN (final) | TCN + despike | verdict |
+|---|---|---|---|
+| validate `>25` CAE | -915.1 | -896.9 | unchanged |
+| validate `>25` fraction negative | 1.00 | **1.00** | unchanged |
+| validate bucket-mean MAE | 8.71 | 9.00 | worse |
+| test bucket-mean MAE | **7.17** | 7.76 | worse (+8%) |
+| test 60 s drift | 579.4 | 582.4 | within noise (SE +-54 m) |
+| test 60 s drift, oracle heading | 214.1 | 219.3 | within noise |
+
+**Not adopted.** Drift is unchanged within the estimator's own noise, and
+bucket-mean MAE is ~8% worse on both splits.
+
+**Why it degrades rather than helps.** At k=3 MAD on a 5-sample window the
+rule flags ~11% of samples, and calibration on synthetic CLEAN data shows that
+is almost entirely false positives:
+
+| clean signal | k=3 | k=4 | k=5 |
+|---|---|---|---|
+| white noise | 11.90% | 8.12% | 6.01% |
+| random walk | 10.41% | 7.60% | 5.92% |
+
+3 MAD is ~2.0 sigma for Gaussian data, and a 5-sample window makes the MAD
+estimate itself noisy. Measured despike fractions on real sessions (mean
+**11.33%**, range 2.86-12.57% over 58 sessions) match the synthetic
+false-positive rate almost exactly.
+
+So the filter is mostly replacing legitimate samples with local medians. That
+removes high-frequency content — which is precisely the vibration-texture cue
+the model depends on (§3, §7b). **Despiking attenuates the model's dominant
+signal, which is why MAE gets worse.**
+
+**Both requested diagnostics come back null.** Sessions the brief identified
+as pothole/bump/gravel despike at 11.79% (S-Vta27) and 11.77% (S-Vtb5) against
+a corpus mean of 11.33% — indistinguishable. The ">5% suggests a rough
+recording" flag fires on **57 of 58 sessions**, so it measures the threshold,
+not the road surface. (The repo carries no per-session surface labels; the
+categorised folders are named by session ID only.)
+
+The despiker does remove genuine impulses — injected 15 m/s^2 spikes drop to
+1.58 residual — the problem is that at k=3 this is buried in collateral
+replacement. k=5 (~6% false positive) would be the obvious retry if this is
+revisited.
+
 ### This generalises the 2 Hz aliasing result
 
 The feature-probe mechanism test (§5) showed the probe's advantage collapsing
