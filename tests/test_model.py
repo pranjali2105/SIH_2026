@@ -147,7 +147,7 @@ def test_multitask_loss_reports_every_component():
     from model.losses import test_shapes
     losses = test_shapes(batch=8, verbose=False)
     assert set(losses) == {"total", "displacement", "stationary", "physics",
-                           "yaw", "smoothness"}
+                           "yaw", "smoothness", "nhc"}
     for v in losses.values():
         assert torch.isfinite(v)
 
@@ -227,3 +227,43 @@ def test_multitask_loss_omits_physics_for_resnet_outputs():
            "session_id": torch.zeros(B, dtype=torch.long),
            "t0": torch.arange(B, dtype=torch.float32)}
     assert multitask_loss(out, tgt)["physics"].item() == 0.0
+
+
+# -- NHC training penalty --------------------------------------------------
+
+def test_nhc_penalty_is_zero_when_driving_straight():
+    from model.losses import nhc_penalty
+    v = torch.full((8,), 25.0)
+    assert nhc_penalty(v, torch.zeros(8, 30)).item() == pytest.approx(0.0)
+
+
+def test_nhc_penalty_is_minimised_by_suppressing_speed_during_turns():
+    """The pre-registered failure mode, provable without training.
+
+    The penalty scales with v^2 for any nonzero yaw rate, so gradient descent
+    can reduce it by predicting a smaller displacement during cornering --
+    regardless of whether the vehicle actually slowed.
+    """
+    from model.losses import nhc_penalty
+    turning = torch.full((8, 30), 0.3)
+    fast = nhc_penalty(torch.full((8,), 25.0), turning).item()
+    slow = nhc_penalty(torch.full((8,), 5.0), turning).item()
+    assert slow < fast / 10, "penalty should fall steeply as predicted speed drops"
+
+
+def test_nhc_penalty_rejects_wrong_shape():
+    from model.losses import nhc_penalty
+    with pytest.raises(ValueError, match=r"\(B, T\)"):
+        nhc_penalty(torch.ones(8), torch.ones(8))
+
+
+def test_nhc_term_off_by_default_when_gyro_absent():
+    from model.losses import multitask_loss
+    B = 8
+    out = {"mu": torch.rand(B), "logvar": torch.zeros(B),
+           "stationary_logit": torch.zeros(B), "yaw_rate": torch.zeros(B)}
+    tgt = {"displacement": torch.rand(B), "is_stationary": torch.zeros(B),
+           "yaw_rate": torch.full((B,), float("nan")),
+           "session_id": torch.zeros(B, dtype=torch.long),
+           "t0": torch.arange(B, dtype=torch.float32)}
+    assert multitask_loss(out, tgt)["nhc"].item() == 0.0

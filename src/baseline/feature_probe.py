@@ -101,13 +101,22 @@ class ProbeHarnessPredictor:
     displacement contribution.
     """
 
-    def __init__(self, probe, session, name: str):
+    def __init__(self, probe, session, name: str,
+                 heading_source: str = "constant",
+                 window_samples: int | None = None):
+        """heading_source: "constant" holds the t0 GPS heading (the probe has
+        no yaw output, so this isolates displacement); "gyro" integrates the
+        raw levelled gyro z-axis, matching what the TCN configuration uses so
+        the two are compared on identical heading.
+        """
         from data.sanity import gps_cumulative_distance
         from data.windows import GRID_HZ, WINDOW_SAMPLES, levelled_channels
         from data.loader import _find
 
         self.probe, self.name = probe, name
-        self.hz, self.win = GRID_HZ, WINDOW_SAMPLES
+        self.heading_source = heading_source
+        self.hz = GRID_HZ
+        self.win = int(window_samples or WINDOW_SAMPLES)
         gps = gps_cumulative_distance(session)
         lo, hi = float(gps[0].min()), float(gps[0].max())
         self.grid = np.arange(lo, hi, 1.0 / GRID_HZ)
@@ -121,22 +130,46 @@ class ProbeHarnessPredictor:
             else np.zeros_like(self.grid))
 
     def predict(self, t0: float, duration: float) -> dict:
+        return self.predict_many([t0], duration)[0]
+
+    def predict_many(self, t0s, duration: float) -> list[dict]:
+        """Batched: the probe reads only raw sensor windows, so every step of
+        every outage is independent and heading is a cumulative sum after."""
         n = int(round(duration))
-        h = float(np.interp(t0, self.grid, self.heading))
-        wins, valid = [], []
-        for k in range(n):
-            end = int(np.searchsorted(self.grid, t0 + k))
-            start = end - self.win
-            if self.chan is None or start < 0 or end > self.chan.shape[0]:
-                valid.append(False)
-                wins.append(np.zeros((self.win, 6), dtype=np.float32))
-            else:
-                valid.append(True)
-                wins.append(self.chan[start:end])
+        t0s = np.asarray(t0s, dtype=float)
+        wins, valid = [], np.zeros((t0s.size, n), dtype=bool)
+        starts = np.zeros((t0s.size, n), dtype=np.int64)
+        for i, t0 in enumerate(t0s):
+            for k in range(n):
+                end = int(np.searchsorted(self.grid, t0 + k))
+                st = end - self.win
+                starts[i, k] = st
+                if self.chan is not None and st >= 0 and end <= self.chan.shape[0]:
+                    valid[i, k] = True
+                    wins.append(self.chan[st:end])
+                else:
+                    wins.append(np.zeros((self.win, 6), dtype=np.float32))
         F = window_features(np.stack(wins))
-        d = self.probe.predict(F)
-        d = np.where(np.asarray(valid), d, 0.0)
-        return {"displacements": d, "headings": np.full(n, h)}
+        d = self.probe.predict(F).reshape(t0s.size, n)
+        d = np.where(valid, d, 0.0)
+
+        h0 = np.interp(t0s, self.grid, self.heading)
+        if self.heading_source == "gyro" and self.chan is not None:
+            # Mean levelled gyro-z over the final second of each window,
+            # integrated -- identical to the TCN configuration's heading.
+            step = int(self.hz)
+            rate = np.zeros((t0s.size, n))
+            for i in range(t0s.size):
+                for k in range(n):
+                    if not valid[i, k]:
+                        continue
+                    e = int(starts[i, k]) + self.win
+                    rate[i, k] = float(np.mean(self.chan[max(e - step, 0):e, 5]))
+            headings = h0[:, None] + np.cumsum(rate, axis=1)
+        else:
+            headings = np.repeat(h0[:, None], n, axis=1)
+        return [{"displacements": d[i], "headings": headings[i]}
+                for i in range(t0s.size)]
 
 
 # --------------------------------------------------------------------------

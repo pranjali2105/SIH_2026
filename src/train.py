@@ -76,6 +76,8 @@ class Config:
     drop_channels: tuple = ()
     drop_scale: float = 0.0       # 0 = zero out; e.g. 0.25 = down-weight
     despike: bool = False
+    nhc_lambda: float = 0.0       # 0 disables the NHC training penalty
+    stride_samples: int = 10
     device: str = "cpu"
 
 
@@ -175,6 +177,10 @@ class WindowDataset(Dataset):
             "session_id": torch.tensor(self.session_id[i]),
             "t0": torch.tensor(self.t0[i]),
             "weight": torch.tensor(self.weight[i]),
+            # Raw levelled gyro z: the yaw rate the NHC penalty integrates.
+            # Taken from the INPUT, never from a model output.
+            "gyro_yaw": torch.from_numpy(
+                np.ascontiguousarray(w[:, 5].astype(np.float32))),
         }
 
 
@@ -460,6 +466,10 @@ def main(argv=None) -> int:
     ap.add_argument("--drop-channels", default="",
                     help="comma-separated channel indices to suppress, "
                          "e.g. '2' for the vertical accelerometer")
+    ap.add_argument("--stride-samples", type=int, default=10,
+                    help="window stride in samples at 10 Hz")
+    ap.add_argument("--nhc-lambda", type=float, default=0.0,
+                    help="weight on the NHC lateral-velocity training penalty")
     ap.add_argument("--despike", action="store_true",
                     help="rolling-median/MAD despiking before windowing")
     ap.add_argument("--drop-scale", type=float, default=0.0,
@@ -476,13 +486,16 @@ def main(argv=None) -> int:
                  arch=args.arch, stem_width=args.stem_width,
                  drop_channels=tuple(int(c) for c in args.drop_channels.split(",")
                                      if c.strip()),
-                 drop_scale=args.drop_scale, despike=args.despike)
+                 drop_scale=args.drop_scale, despike=args.despike,
+                 nhc_lambda=args.nhc_lambda,
+                 stride_samples=args.stride_samples)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
     print("building windows...", file=sys.stderr)
     built, failures = build_all(window_samples=cfg.window_samples,
-                                apply_despike=cfg.despike)
+                                apply_despike=cfg.despike,
+                                stride_samples=cfg.stride_samples)
     verify_no_leakage(built, expected_samples=cfg.window_samples)
     train_b = [b for b in built if b.role == "train"]
     val_b = [b for b in built if b.role == "validate"]
@@ -511,7 +524,8 @@ def main(argv=None) -> int:
         model = ResNet1D(widths=cfg.widths).to(cfg.device)
     n_par = sum(p.numel() for p in model.parameters())
     print(f"widths {cfg.widths}, window {cfg.window_samples} samples "
-          f"({cfg.window_samples / 10:g} s), {n_par:,} parameters "
+          f"({cfg.window_samples / 10:g} s), stride {cfg.stride_samples} "
+          f"({cfg.stride_samples / 10:g} s), {n_par:,} parameters "
           f"[{cfg.arch}]",
           file=sys.stderr)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr,
@@ -538,7 +552,7 @@ def main(argv=None) -> int:
             out = model(x)
             targets = {k: batch[k].to(cfg.device)
                        for k in ("displacement", "is_stationary", "yaw_rate",
-                                 "session_id", "t0", "weight")}
+                                 "session_id", "t0", "weight", "gyro_yaw")}
             if warmup:
                 # Phase 1: MSE on the mean only. The NLL would otherwise buy
                 # loss reduction by inflating sigma before mu is calibrated.
@@ -549,7 +563,9 @@ def main(argv=None) -> int:
                 loss = (se * w).sum() / w.sum().clamp_min(1e-8)
                 parts = {"total": loss, "displacement": loss}
             else:
-                parts = multitask_loss(out, targets, pos_weight=pos_weight)
+                parts = multitask_loss(
+                    out, targets, pos_weight=pos_weight,
+                    weights={"nhc": cfg.nhc_lambda})
                 loss = parts["total"]
             opt.zero_grad(set_to_none=True)
             loss.backward()

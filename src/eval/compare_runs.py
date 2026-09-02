@@ -32,6 +32,7 @@ RUNS = {
     "tcn_physics_3s": "results/run_tcn/best.pt",
     "tcn_no_accz": "results/run_tcn_noz/best.pt",
     "tcn_despike": "results/run_tcn_despike/best.pt",
+    "tcn_nhc": "results/run_tcn_nhc/best.pt",
 }
 
 

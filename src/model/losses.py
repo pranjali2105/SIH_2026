@@ -29,6 +29,9 @@ W_STATIONARY = 0.5
 W_PHYSICS = 0.3
 W_YAW = 0.2
 W_SMOOTHNESS = 0.1
+# Non-holonomic lateral-velocity penalty. Deliberately small: a soft nudge,
+# not a hard constraint.
+W_NHC = 0.05
 
 # Sample interval of the per-timestep sequences. The window is 10 Hz, so
 # dt = 0.1 s. Using dt = 1.0 would state that consecutive samples are a second
@@ -105,6 +108,42 @@ def physics_penalty(v_pred_seq: torch.Tensor, a_pred_seq: torch.Tensor,
     return (residual ** 2).mean()
 
 
+def nhc_penalty(v_pred: torch.Tensor, gyro_yaw_rate: torch.Tensor,
+                dt: float = PHYSICS_DT) -> torch.Tensor:
+    """Non-holonomic lateral-velocity penalty, applied during TRAINING.
+
+    Accumulates heading drift across the window from the RAW gyro (not the
+    yaw-correction head, which is disabled in the final configuration), then
+    penalises the implied lateral velocity component:
+
+        psi_drift = cumsum(omega * dt)
+        v_lat     = v * sin(psi_drift)
+
+    A road vehicle cannot move sideways, so v_lat should be ~0.
+
+    dt NOTE: the spec suggested dt=1.0, but the window is sampled at 10 Hz, so
+    consecutive samples are 0.1 s apart. With dt=1.0 the accumulated psi_drift
+    is 10x too large and runs through the nonlinearity of sin() -- for a 3 s
+    window at a modest 0.1 rad/s that is 3 rad rather than 0.3 rad, i.e. past
+    where sin is even monotone. PHYSICS_DT (0.1 s) is used; `dt` is exposed so
+    the alternative can be tested.
+
+    PRE-REGISTERED PREDICTION (see findings.md): psi_drift from the raw gyro
+    conflates genuine heading change with the phone's fixed but unidentified
+    mount rotation -- the same ambiguity that defeated the inference-time ESKF.
+    The penalty should therefore fail to distinguish real turns from
+    mount-induced yaw, and instead teach the model to suppress speed whenever
+    the yaw rate is nonzero. Expected signature: WORSE under-prediction during
+    genuine cornering, with no drift improvement.
+    """
+    if gyro_yaw_rate.dim() != 2:
+        raise ValueError(f"gyro_yaw_rate must be (B, T), got "
+                         f"{tuple(gyro_yaw_rate.shape)}")
+    psi_drift = torch.cumsum(gyro_yaw_rate * dt, dim=1)
+    v_lat = v_pred.unsqueeze(1) * torch.sin(psi_drift)
+    return (v_lat ** 2).mean()
+
+
 def yaw_rate_mae(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """MAE over valid windows only.
 
@@ -148,7 +187,8 @@ def multitask_loss(outputs: dict[str, torch.Tensor],
     rather than a single number that hides a collapsed head.
     """
     w = {"displacement": W_DISPLACEMENT, "stationary": W_STATIONARY,
-         "physics": W_PHYSICS, "yaw": W_YAW, "smoothness": W_SMOOTHNESS}
+         "physics": W_PHYSICS, "yaw": W_YAW, "smoothness": W_SMOOTHNESS,
+         "nhc": W_NHC}
     if weights:
         w.update(weights)
 
@@ -163,12 +203,17 @@ def multitask_loss(outputs: dict[str, torch.Tensor],
         l_phys = physics_penalty(outputs["v_seq"], outputs["a_seq"])
     else:
         l_phys = l_disp.new_zeros(())
+    if targets.get("gyro_yaw") is not None:
+        l_nhc = nhc_penalty(outputs["mu"], targets["gyro_yaw"])
+    else:
+        l_nhc = l_disp.new_zeros(())
 
     total = (w["displacement"] * l_disp + w["stationary"] * l_stat
              + w["physics"] * l_phys + w["yaw"] * l_yaw
-             + w["smoothness"] * l_smooth)
+             + w["smoothness"] * l_smooth + w["nhc"] * l_nhc)
     return {"total": total, "displacement": l_disp, "stationary": l_stat,
-            "physics": l_phys, "yaw": l_yaw, "smoothness": l_smooth}
+            "physics": l_phys, "yaw": l_yaw, "smoothness": l_smooth,
+            "nhc": l_nhc}
 
 
 def test_shapes(batch: int = 16, verbose: bool = True) -> dict:
