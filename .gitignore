@@ -1,5 +1,8 @@
-# Data (never committed)
-data/
+# Data (never committed). Anchored to the repo root: an unanchored `data/`
+# also matches `src/data/`, which is a DIFFERENT thing -- the loader/windows
+# source package, not the dataset -- and silently excludes it from every
+# commit. That happened here; see the note left for the team.
+/data/
 
 # Python
 __pycache__/

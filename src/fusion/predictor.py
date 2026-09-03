@@ -31,7 +31,8 @@ class ESKFPredictor:
 
     def __init__(self, inner, session, cfg: ESKFConfig | None = None,
                  sub_hz: int = 10, conjunction_zupt: bool = True,
-                 update_hz: float = 10.0):
+                 update_hz: float = 10.0, calibrate_mount_yaw: bool = True,
+                 mount_yaw_lookback_s: float = 180.0):
         """`inner` is a ModelPredictor, reused for its channel grid and model.
 
         `conjunction_zupt`: require agreement between the classifier and three
@@ -40,11 +41,22 @@ class ESKFPredictor:
         (precision 0.288) -- pos_weight=16.9 overshot. On a motorway it fires
         6.8% of the time, and each false fire sets the gyro bias to the
         vehicle's actual turn rate, which is how the filter diverged.
+
+        `calibrate_mount_yaw`: fit phi offline from GPS-available driving
+        before each outage (`fusion.mount_calibration`) instead of leaving
+        it at 0 and letting the filter chase it during the outage, which is
+        the divergence findings.md §8 documents. Falls back to phi=0 (prior
+        behaviour) when calibration is unavailable or the fit is not
+        `.observable` -- a bad phi is worse than no phi.
         """
         self.inner = inner
+        self.session = session
         self.cfg = cfg or ESKFConfig()
         self.sub = int(sub_hz)
         self.conjunction_zupt = conjunction_zupt
+        self.calibrate_mount_yaw = calibrate_mount_yaw
+        self.mount_yaw_lookback_s = mount_yaw_lookback_s
+        self._phi_cache: dict[float, float] = {}
         # How often the NHC pseudo-measurement is APPLIED, as opposed to how
         # often the state is propagated. Applying it every sub-sample treats
         # 600 readings of one physical fact as 600 independent measurements,
@@ -52,6 +64,37 @@ class ESKFPredictor:
         self.update_every = max(1, int(round(sub_hz / max(update_hz, 1e-6))))
         self.grid = inner.grid
         self.chan = inner.chan
+
+    # -- mount-yaw calibration ----------------------------------------------
+
+    def _phi0(self, t0: float) -> float:
+        """Cached, per-t0 offline phi estimate (0.0 if unavailable/untrusted).
+
+        Cached rather than computed once per session: mirrors
+        `mapmatch.predictor._gyro_sign`'s own per-t0 cache, and keeps the
+        "nothing at or after t0 is read" guarantee exact for every outage
+        scored from this session, not just the first.
+        """
+        if not self.calibrate_mount_yaw:
+            return 0.0
+        key = round(float(t0), 3)
+        if key in self._phi_cache:
+            return self._phi_cache[key]
+        phi = 0.0
+        try:
+            from fusion.mount_calibration import estimate_mount_yaw_for_session
+            est = estimate_mount_yaw_for_session(
+                self.session, t0, lookback_s=self.mount_yaw_lookback_s)
+            if est is not None and est.observable:
+                phi = est.phi_rad
+        except Exception:                      # noqa: BLE001
+            # Calibration is a refinement, not a dependency: any failure to
+            # fit (missing columns, too little history, an absent `data`
+            # package) must fall back to the prior phi=0 behaviour rather
+            # than crash the predictor.
+            phi = 0.0
+        self._phi_cache[key] = phi
+        return phi
 
     # -- per-second model outputs -----------------------------------------
 
@@ -102,7 +145,7 @@ class ESKFPredictor:
         dt = 1.0 / self.sub
         results = []
         for i in range(t0s.size):
-            f = NonHolonomicESKF(float(h0[i]), self.cfg)
+            f = NonHolonomicESKF(float(h0[i]), self.cfg, phi0=self._phi0(t0s[i]))
             disps, heads = np.zeros(n), np.zeros(n)
             for k in range(n):
                 d = float(mu[i, k]) if valid[i, k] else (disps[k - 1] if k else 0.0)

@@ -27,6 +27,7 @@ from baseline.ins_dr import INSDeadReckoning
 from data.loader import list_sessions, load_session
 from eval.harness import iter_outages, run_session
 from mapmatch.graph import RoadGraph
+from mapmatch.hmm_predictor import HMMMapMatchConfig, HMMMapMatchedPredictor
 from mapmatch.osrm import DEFAULT_DATASET, OSRMClient
 from mapmatch.predictor import MapMatchConfig, MapMatchedPredictor
 
@@ -83,8 +84,15 @@ def score_session(session, predictors, durations, rows, skips):
                              "true_distance_m": m["true_distance_m"]})
 
 
-def build_predictors(session, graph, osrm, cfg, model, ckpt, device):
-    """Baselines, and each wrapped in the along-road tracker."""
+def build_predictors(session, graph, osrm, cfg, model, ckpt, device,
+                     hmm_cfg=None):
+    """Baselines, and each wrapped in the along-road tracker.
+
+    Every inner predictor is wrapped TWICE: once through the existing
+    greedy tracker (`map_matched_X`) and once through the beam-search
+    tracker (`hmm_matched_X`, see `mapmatch.hmm_predictor`), so a single run
+    of this script puts them side by side on the same outages.
+    """
     inner = {"constant_velocity_dr": ConstantVelocityDR(session),
              "ins_dr": INSDeadReckoning(session)}
     if model is not None:
@@ -98,6 +106,11 @@ def build_predictors(session, graph, osrm, cfg, model, ckpt, device):
         mm = MapMatchedPredictor(p, session, graph, osrm, cfg)
         mm.name = f"map_matched_{name}"
         preds[mm.name] = mm
+
+        hmm = HMMMapMatchedPredictor(p, session, graph, osrm,
+                                     hmm_cfg or HMMMapMatchConfig(**vars(cfg)))
+        hmm.name = f"hmm_matched_{name}"
+        preds[hmm.name] = hmm
     return preds
 
 

@@ -114,10 +114,21 @@ class NonHolonomicESKF:
     N = 5
     I_PX, I_PY, I_PSI, I_BG, I_PHI = range(5)
 
-    def __init__(self, psi0: float, cfg: ESKFConfig | None = None):
+    def __init__(self, psi0: float, cfg: ESKFConfig | None = None,
+                 phi0: float = 0.0):
+        """`phi0`: mount yaw to hold the filter at when `estimate_phi=False`.
+
+        Findings.md §8 diagnosed why `estimate_phi=True` diverges: 60 s of
+        outage data cannot identify phi and the gyro bias at once. `phi0`
+        lets a caller supply phi from `fusion.mount_calibration` instead --
+        fit offline, once per session, from GPS-available driving before the
+        outage -- so the filter is never asked to identify it from a signal
+        that cannot support it. Default 0.0 keeps prior behaviour unchanged.
+        """
         self.cfg = cfg or ESKFConfig()
         self.x = np.zeros(self.N)
         self.x[self.I_PSI] = psi0
+        self.x[self.I_PHI] = phi0
         phi_var = (self.cfg.init_phi_std ** 2) if self.cfg.estimate_phi else 0.0
         self.P = np.diag([1.0, 1.0,
                           self.cfg.init_heading_std ** 2,
