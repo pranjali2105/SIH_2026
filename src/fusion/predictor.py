@@ -80,19 +80,8 @@ class ESKFPredictor:
         key = round(float(t0), 3)
         if key in self._phi_cache:
             return self._phi_cache[key]
-        phi = 0.0
-        try:
-            from fusion.mount_calibration import estimate_mount_yaw_for_session
-            est = estimate_mount_yaw_for_session(
-                self.session, t0, lookback_s=self.mount_yaw_lookback_s)
-            if est is not None and est.observable:
-                phi = est.phi_rad
-        except Exception:                      # noqa: BLE001
-            # Calibration is a refinement, not a dependency: any failure to
-            # fit (missing columns, too little history, an absent `data`
-            # package) must fall back to the prior phi=0 behaviour rather
-            # than crash the predictor.
-            phi = 0.0
+        from fusion.mount_calibration import safe_phi0
+        phi = safe_phi0(self.session, t0, lookback_s=self.mount_yaw_lookback_s)
         self._phi_cache[key] = phi
         return phi
 
@@ -200,4 +189,94 @@ class ESKFPredictor:
                 heads[k] = f.heading
             results.append({"displacements": disps, "headings": heads,
                             "trace": f.trace})
+        return results
+
+
+class SpeedFusedPredictor:
+    """Wraps a ModelPredictor with `fusion.speed_filter`'s scalar Kalman
+    fusion, for use as the `inner` of `mapmatch.predictor.MapMatchedPredictor`
+    / `mapmatch.hmm_predictor.HMMMapMatchedPredictor`.
+
+    Unlike `ESKFPredictor` this carries no heading state: the along-road
+    trackers already discard `inner`'s headings (`mapmatch.predictor`'s own
+    docstring: "the map supplies heading"), so the only thing worth
+    improving here is the scalar per-second displacement they advance
+    along the road by. See `fusion.speed_filter` for what this can and
+    cannot fix -- in particular, it does not remove a flat constant bias,
+    only a regime-dependent one, which is the shape `results/final_scoring.md`
+    documents for the real model.
+    """
+
+    name = "model_speed_fused"
+
+    def __init__(self, inner, session, cfg=None,
+                 calibrate_mount_yaw: bool = True,
+                 mount_yaw_lookback_s: float = 180.0):
+        self.inner = inner
+        self.session = session
+        from .speed_filter import SpeedFilterConfig
+        self.cfg = cfg or SpeedFilterConfig()
+        self.calibrate_mount_yaw = calibrate_mount_yaw
+        self.mount_yaw_lookback_s = mount_yaw_lookback_s
+        self._phi_cache: dict[float, float] = {}
+        self.grid = inner.grid
+        self.chan = inner.chan
+        self.hz = getattr(inner, "hz", 10)
+
+    def _phi0(self, t0: float) -> float:
+        if not self.calibrate_mount_yaw:
+            return 0.0
+        key = round(float(t0), 3)
+        if key in self._phi_cache:
+            return self._phi_cache[key]
+        from fusion.mount_calibration import safe_phi0
+        phi = safe_phi0(self.session, t0, lookback_s=self.mount_yaw_lookback_s)
+        self._phi_cache[key] = phi
+        return phi
+
+    def _forward_accel(self, t0: float, n: int, phi: float) -> np.ndarray:
+        """Per-second mean forward specific force, in the vehicle frame.
+
+        NaN wherever the IMU grid does not cover a full second's worth of
+        samples -- `fuse_speed_sequence` treats that as "skip the predict
+        step this second" rather than inventing an acceleration.
+        """
+        out = np.full(n, np.nan)
+        if self.chan is None:
+            return out
+        c, s = np.cos(phi), np.sin(phi)
+        step = int(round(self.hz))
+        start = int(np.searchsorted(self.grid, t0))
+        for k in range(n):
+            lo, hi = start + k * step, start + (k + 1) * step
+            if lo < 0 or hi > self.chan.shape[0]:
+                continue
+            seg = self.chan[lo:hi]
+            out[k] = float(seg[:, 0].mean() * c + seg[:, 1].mean() * s)
+        return out
+
+    def predict(self, t0: float, duration: float) -> dict:
+        return self.predict_many([t0], duration)[0]
+
+    def predict_many(self, t0s, duration: float) -> list[dict]:
+        from .speed_filter import fuse_speed_sequence
+        t0s = np.atleast_1d(np.asarray(t0s, dtype=float))
+        outs = (self.inner.predict_many(t0s, duration)
+               if hasattr(self.inner, "predict_many")
+               else [self.inner.predict(float(t0), duration) for t0 in t0s])
+
+        results = []
+        for i, t0 in enumerate(t0s):
+            mu = np.asarray(outs[i]["displacements"], dtype=float)
+            n = mu.shape[0]
+            # This inner's `predict_many` (train.ModelPredictor) does not
+            # expose per-step sigma; NaN everywhere falls back to
+            # `cfg.max_sigma_mu` inside `fuse_speed_sequence`, i.e. "trust
+            # the model as little as configured", not "trust it fully".
+            sigma_mu = np.full(n, np.nan)
+            phi = self._phi0(float(t0))
+            a_fwd = self._forward_accel(float(t0), n, phi)
+            filt = fuse_speed_sequence(mu, sigma_mu, a_fwd, cfg=self.cfg)
+            results.append({"displacements": filt,
+                            "headings": outs[i]["headings"]})
         return results

@@ -101,6 +101,12 @@ def build_predictors(session, graph, osrm, cfg, model, ckpt, device,
                                         device, zupt=True,
                                         heading_source="gyro",
                                         conjunction_zupt=True)
+        # Only the model has a `.chan`/uncertainty worth fusing against the
+        # accelerometer -- the baselines read no IMU at all (or, for INS DR,
+        # already integrate it directly), so there is nothing for
+        # `SpeedFusedPredictor` to add there.
+        from fusion.predictor import SpeedFusedPredictor
+        inner["model_speed_fused"] = SpeedFusedPredictor(inner["model"], session)
     preds = dict(inner)
     for name, p in inner.items():
         mm = MapMatchedPredictor(p, session, graph, osrm, cfg)

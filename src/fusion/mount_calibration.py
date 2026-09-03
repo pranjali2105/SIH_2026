@@ -268,3 +268,24 @@ def estimate_mount_yaw_for_session(session, t0: float,
 
     return estimate_mount_yaw(gps_t, speed, heading_unwrapped, imu_t, chan,
                               t0, lookback_s=lookback_s, **kwargs)
+
+
+def safe_phi0(session, t0: float, lookback_s: float = DEFAULT_LOOKBACK_S,
+             **kwargs) -> float:
+    """`estimate_mount_yaw_for_session`, failing closed to 0.0 on any error
+    or an unobservable fit.
+
+    The entry point predictor wrappers (`fusion.predictor.ESKFPredictor`,
+    `SpeedFusedPredictor`) should call: calibration is a refinement, never a
+    hard dependency, so a missing `data` package, too little pre-outage
+    history, or a drive that never brakes/turns must fall back to prior
+    (phi=0) behaviour rather than raise or return an untrustworthy angle.
+    """
+    try:
+        est = estimate_mount_yaw_for_session(session, t0, lookback_s=lookback_s,
+                                             **kwargs)
+        if est is not None and est.observable:
+            return est.phi_rad
+    except Exception:                          # noqa: BLE001
+        pass
+    return 0.0
