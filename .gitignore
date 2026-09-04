@@ -1,7 +1,6 @@
-# Data (never committed). Anchored to the repo root: an unanchored `data/`
-# also matches `src/data/`, which is a DIFFERENT thing -- the loader/windows
-# source package, not the dataset -- and silently excludes it from every
-# commit. That happened here; see the note left for the team.
+# Datasets (never committed). ANCHORED with a leading slash: a bare `data/`
+# matches at ANY depth, which silently excluded the src/data/ SOURCE package
+# and left the repo unable to import its own loader.
 /data/
 
 # Python
