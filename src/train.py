@@ -239,7 +239,13 @@ class ModelPredictor:
                  drop_channels: tuple = (), drop_scale: float = 0.0,
                  despike_input: bool = False):
         """heading_source: "model" uses the yaw head; "gyro" integrates the raw
-        levelled gyro z-axis instead, which ablates the head entirely."""
+        levelled gyro z-axis instead, which ablates the head entirely.
+        Defaults to "model" for backward compatibility with existing call
+        sites (this default is also relied on by train.py's own
+        early-stopping drift eval and by final_scoring.py's "model"/"model_zupt"
+        ablation rows) even though results/findings.md #2 measured "gyro"
+        beating it on held-out test -- see the open question left in the
+        session report about whether early-stopping should switch too."""
         from data.windows import GRID_HZ, WINDOW_SAMPLES, levelled_channels
         from data.sanity import gps_cumulative_distance
         import pandas as pd
