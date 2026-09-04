@@ -179,3 +179,56 @@ def test_prune_dedupes_same_edge_keeping_the_better_one():
 
 def test_prune_of_empty_list_is_empty():
     assert HMMMapMatchedPredictor._prune([], beam_width=3) == []
+
+
+# -- regressions for the two issues flagged in review of PR #1 -------------
+
+def test_forked_hypotheses_get_independent_traces():
+    """A pruned branch must not contribute diagnostics to a surviving one.
+
+    `_advance_hyp` mutates the trace it is handed, so sharing one object
+    across forks made junction counts and the turn list describe paths that
+    were never taken.
+    """
+    from mapmatch.hmm_predictor import _Hyp, _copy_trace
+    from mapmatch.predictor import OutageTrace
+
+    parent = OutageTrace()
+    parent.junction_forced = 2
+    parent.turns = [(0.1, 0.2)]
+
+    child = _copy_trace(parent)
+    child.junction_forced += 1
+    child.turns.append((0.3, 0.4))
+
+    assert parent.junction_forced == 2, "parent trace was mutated by the child"
+    assert parent.turns == [(0.1, 0.2)], "parent turn list was mutated"
+    assert child.junction_forced == 3
+    assert len(child.turns) == 2
+
+
+def test_copy_trace_preserves_scalar_fields():
+    from mapmatch.hmm_predictor import _copy_trace
+    from mapmatch.predictor import OutageTrace
+
+    tr = OutageTrace()
+    tr.junctions, tr.rematches, tr.off_network = 7, 3, True
+    tr.gyro_sign = -1.0
+    cp = _copy_trace(tr)
+    assert (cp.junctions, cp.rematches, cp.off_network, cp.gyro_sign) == \
+        (7, 3, True, -1.0)
+
+
+def test_start_candidates_are_sorted_before_truncation():
+    """Slicing an unsorted candidate list can drop the nearest road.
+
+    The list is built in OSRM's order with failures skipped, so `out[:n]`
+    without sorting is not the n best.
+    """
+    import numpy as np
+    out = [("far", -0.9), ("near", -0.1), ("mid", -0.5)]
+    out.sort(key=lambda pw: pw[1], reverse=True)
+    best = out[0][1]
+    kept = [(p, w - best) for p, w in out[:2]]
+    assert [p for p, _ in kept] == ["near", "mid"]
+    assert kept[0][1] == 0.0

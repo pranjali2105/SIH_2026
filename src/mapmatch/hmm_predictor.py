@@ -25,7 +25,7 @@ untouched and the two can be scored side by side (see
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -54,6 +54,13 @@ class HMMMapMatchConfig(MapMatchConfig):
     # How many of OSRM's top candidates seed separate starting hypotheses,
     # instead of the greedy tracker's single best-plus-ambiguity-flag.
     n_start_hypotheses: int = 3
+
+
+def _copy_trace(tr: OutageTrace) -> OutageTrace:
+    """Independent copy of a trace, including its mutable `turns` list."""
+    new = replace(tr)
+    new.turns = list(tr.turns)
+    return new
 
 
 @dataclass
@@ -160,7 +167,12 @@ class HMMMapMatchedPredictor(MapMatchedPredictor):
         if not out:
             return []
         n_start = getattr(cfg, "n_start_hypotheses", 3)
-        best = max(w for _, w in out)
+        # Sort BEFORE truncating. `out` is built in OSRM's candidate order and
+        # entries are skipped when they fail to locate, so the first n are not
+        # the n nearest -- slicing unsorted can seed the beam with the worst
+        # candidates and drop the best.
+        out.sort(key=lambda pw: pw[1], reverse=True)
+        best = out[0][1]
         return [(p, w - best) for p, w in out[:n_start]]
 
     # -- beam propagation ----------------------------------------------------
@@ -266,11 +278,20 @@ class HMMMapMatchedPredictor(MapMatchedPredictor):
             nxt = []
             d = float(disp[k])
             for h in hyps:
-                for pos2, lp2 in self._advance_hyp(h.pos, d, t0 + k, d, sign,
-                                                   h.log_prob, h.trace):
+                # Each child gets its OWN trace. `_advance_hyp` mutates the
+                # trace it is handed (junction_forced, turns, off_network), so
+                # sharing one object across forks lets pruned branches
+                # contribute diagnostics to the hypothesis that survives --
+                # the reported junction counts and turn list would describe
+                # paths that were never taken.
+                children = list(self._advance_hyp(h.pos, d, t0 + k, d, sign,
+                                                  h.log_prob, h.trace))
+                for i, (pos2, lp2) in enumerate(children):
+                    child_trace = h.trace if i == len(children) - 1 \
+                        else _copy_trace(h.trace)
                     nxt.append(_Hyp(pos=pos2, log_prob=lp2,
                                     track=h.track + [self.graph.position(pos2)],
-                                    trace=h.trace))
+                                    trace=child_trace))
             hyps = self._prune(nxt, beam_width)
 
             if (k + 1) >= next_rematch:
