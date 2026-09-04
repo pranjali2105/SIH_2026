@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -39,7 +40,12 @@ from eval.harness import OutageSkipped
 
 from .graph import (EdgePosition, RoadGraph, bearing_rad, geodesic_m,
                     wrap_pi)
-from .osrm import OSRMClient
+
+if TYPE_CHECKING:                       # pragma: no cover
+    # Type-only: importing OSRMClient at runtime would pull `subprocess` and
+    # `urllib` into the library import graph, which the offline (graph) backend
+    # has no business carrying — it is what makes this embeddable.
+    from .osrm import OSRMClient
 
 # Levelled gyro channel 5 is rotation about the vertical. Its sign relative to
 # a compass heading depends on which way the phone faces in its mount, and the
@@ -96,12 +102,37 @@ class MapMatchConfig:
 
     # Matching geometry.
     snap_radius_m: float = 40.0
+    # Bearing half-window in degrees. Applies to BOTH backends: OSRM receives
+    # it as `bearings=b,range`, the graph backend as `heading_tol`. They must
+    # be the same number or the two paths admit different candidate sets --
+    # `RoadGraph.locate` defaults to 90 deg, which is materially looser.
     osrm_bearing_range_deg: int = 60
     n_candidates: int = 3
+    # Candidate source: "graph" runs fully in-process against road_graph.npz
+    # (no subprocess, no HTTP, embeddable); "osrm" queries a local osrm-routed.
+    # Graph is the default because it is the deployable path -- OSRM is kept as
+    # a comparison backend.
+    backend: str = "graph"
     # Two candidates count as plausible-and-competing when the second is
     # within this factor of the first's distance AND names a different road.
     ambiguity_ratio: float = 1.5
     ambiguity_margin_m: float = 15.0
+
+
+def _resolve_backend(cfg: MapMatchConfig, osrm) -> str:
+    """Validate the backend choice at construction, not mid-outage.
+
+    Module-level so it is testable without building a Session.
+    """
+    backend = getattr(cfg, "backend", "graph")
+    if backend not in ("graph", "osrm"):
+        raise ValueError(f"unknown backend {backend!r}; expected "
+                         "'graph' (in-process) or 'osrm'")
+    if backend == "osrm" and osrm is None:
+        raise ValueError(
+            "backend='osrm' needs an OSRMClient. Pass one, or use "
+            "backend='graph' to run fully in-process with no server.")
+    return backend
 
 
 @dataclass
@@ -130,15 +161,17 @@ class MapMatchedPredictor:
     name = "map_matched"
 
     def __init__(self, inner, session: Session, graph: RoadGraph,
-                 osrm: OSRMClient, cfg: MapMatchConfig | None = None):
+                 osrm: "OSRMClient | None" = None,
+                 cfg: MapMatchConfig | None = None):
         from data.windows import GRID_HZ, levelled_channels
         from data.sanity import gps_cumulative_distance
 
         self.inner = inner
         self.session = session
         self.graph = graph
-        self.osrm = osrm
         self.cfg = cfg or MapMatchConfig()
+        self.backend = _resolve_backend(self.cfg, osrm)
+        self.osrm = osrm
         self.hz = GRID_HZ
 
         df = session.df
@@ -266,16 +299,25 @@ class MapMatchedPredictor:
 
     # -- matching ----------------------------------------------------------
 
-    def _match(self, lat: float, lon: float, heading: float | None):
-        """OSRM `/nearest`, anchored onto our own graph.
+    def _candidates(self, lat: float, lon: float, heading: float | None):
+        """Plausible roads at a point, nearest first, as (pos, distance_m).
 
-        Returns (EdgePosition or None, ambiguous). `ambiguous` is true when a
-        second candidate is a genuinely competing road -- comparably close and
-        a DIFFERENT edge of the network. That is the cheap defence against
-        wrong-street failure: when it fires, the caller leaves the estimate
-        alone rather than gambling on which street it is.
+        The one place the backend matters. Everything downstream -- ambiguity,
+        advancing, junction choice -- consumes this list and is backend-blind,
+        which is why the HMM subclass inherits offline support for free.
+
+        `distance_m` is perpendicular metres to the road centreline in BOTH
+        backends, so the ambiguity thresholds are calibrated in the same units
+        either way.
         """
+        if self.backend == "osrm":
+            return self._osrm_candidates(lat, lon, heading)
+        return self._graph_candidates(lat, lon, heading)
+
+    def _osrm_candidates(self, lat: float, lon: float, heading: float | None):
+        """OSRM `/nearest`, anchored onto our own graph."""
         cfg = self.cfg
+        tol = np.radians(cfg.osrm_bearing_range_deg)
         deg = None if heading is None else float(np.degrees(heading)) % 360.0
         wps = self.osrm.nearest(lat, lon, number=cfg.n_candidates, bearing=deg,
                                 bearing_range=cfg.osrm_bearing_range_deg,
@@ -286,14 +328,14 @@ class MapMatchedPredictor:
             wps = self.osrm.nearest(lat, lon, number=cfg.n_candidates,
                                     radius_m=cfg.snap_radius_m)
         if not wps:
-            return None, False
+            return []
 
         # Resolve every candidate onto our own graph before comparing them.
         # Comparing by street NAME alone is not enough: a large share of the
         # segments OSRM returns here are unnamed (service roads, slip roads,
         # unclassified lanes), and treating two unnamed roads as "the same
         # road" would suppress exactly the ambiguity this exists to catch.
-        resolved = []
+        out = []
         for w in wps:
             loc = w.get("location") or [lon, lat]
             wl, wn = float(loc[1]), float(loc[0])
@@ -303,25 +345,89 @@ class MapMatchedPredictor:
                 pos = self.graph.locate_node_pair(nodes[0], nodes[1], wl, wn,
                                                   heading)
             if pos is None:
+                # Same bearing window as the primary filter. Left at
+                # `locate`'s 90 deg default this fallback was looser than the
+                # query that produced the candidate.
                 pos = self.graph.locate(wl, wn, heading,
-                                        radius_m=cfg.snap_radius_m)
-            resolved.append((w, pos))
+                                        radius_m=cfg.snap_radius_m,
+                                        heading_tol=tol)
+            out.append((pos, float(w.get("distance", np.inf))))
+        return out
 
-        best, best_pos = resolved[0]
-        d0 = float(best.get("distance", 0.0))
+    def _graph_candidates(self, lat: float, lon: float, heading: float | None):
+        """Nearest roads straight from the graph -- no server, no HTTP.
+
+        Mirrors `RoadGraph.locate`'s per-edge direction choice and heading
+        tie-break, but keeps every edge as a separate candidate instead of
+        collapsing to a single winner, because the ambiguity test needs the
+        runners-up.
+        """
+        cfg = self.cfg
+        tol = np.radians(cfg.osrm_bearing_range_deg)
+        # Over-fetch: the bearing gate rejects candidates, and asking for
+        # exactly n_candidates would leave fewer than n after filtering.
+        raw = self.graph.nearest_edges(lat, lon, radius_m=cfg.snap_radius_m,
+                                       limit=max(4 * cfg.n_candidates, 12))
+        out = self._directed(raw, heading, tol)
+        if not out:
+            # Mirrors the OSRM retry above, for the same reason.
+            out = self._directed(raw, None, tol)
+        return out[:cfg.n_candidates]
+
+    def _directed(self, raw, heading: float | None, tol: float):
+        """Undirected (edge, dist, offset) -> directed (EdgePosition, dist)."""
+        g = self.graph
+        best: dict[int, tuple] = {}
+        for e, dist, offset in raw:
+            total = float(g.edge_len[e])
+            for d_edge in (2 * e, 2 * e + 1):
+                if not g.passable[d_edge]:
+                    continue
+                off = offset if (d_edge & 1) == 0 else total - offset
+                pos = EdgePosition(int(d_edge), float(np.clip(off, 0.0, total)))
+                score = dist
+                if heading is not None:
+                    delta = abs(float(wrap_pi(g.bearing_at(pos) - heading)))
+                    if delta > tol:
+                        continue
+                    score += 20.0 * (delta / np.pi)   # gentle tie-break, metres
+                if e not in best or score < best[e][0]:
+                    best[e] = (score, pos, float(dist))
+        # Rank on the heading-adjusted score, but REPORT the raw perpendicular
+        # distance: the ambiguity thresholds are metres to the road, and
+        # folding a heading penalty into them would silently retune them.
+        return [(pos, dist) for _, pos, dist
+                in sorted(best.values(), key=lambda v: v[0])]
+
+    def _match(self, lat: float, lon: float, heading: float | None):
+        """One matched position, plus whether the match was contested.
+
+        Returns (EdgePosition or None, ambiguous). `ambiguous` is true when a
+        second candidate is a genuinely competing road -- comparably close and
+        a DIFFERENT edge of the network. That is the cheap defence against
+        wrong-street failure: when it fires, the caller leaves the estimate
+        alone rather than gambling on which street it is.
+        """
+        cfg = self.cfg
+        cands = self._candidates(lat, lon, heading)
+        if not cands:
+            return None, False
+
+        best_pos, d0 = cands[0]
         ambiguous = False
-        for other, pos in resolved[1:]:
-            d1 = float(other.get("distance", np.inf))
+        for pos, d1 in cands[1:]:
             if d1 > max(d0 * cfg.ambiguity_ratio, d0 + cfg.ambiguity_margin_m):
                 continue                      # not plausible; not a competitor
+            # On the graph backend `nearest_edges` already dedupes by
+            # undirected edge, so this is always true and the test costs
+            # nothing. On the OSRM backend several waypoints can land on one
+            # edge, and suppressing that is the whole point -- so the guard
+            # stays shared rather than being deleted as graph-path dead code.
             same_edge = (best_pos is not None and pos is not None
                          and (best_pos.edge >> 1) == (pos.edge >> 1))
             if not same_edge:
                 ambiguous = True
                 break
-
-        # OSRM's car profile and our tag filter can disagree at the margins,
-        # in which case `locate` above already fell back to our own snap.
         return best_pos, ambiguous
 
     # -- junctions ---------------------------------------------------------

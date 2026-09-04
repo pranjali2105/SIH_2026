@@ -51,7 +51,7 @@ class HMMMapMatchConfig(MapMatchConfig):
     # branches that pass it.
     turn_sigma_rad: float = np.deg2rad(20.0)
 
-    # How many of OSRM's top candidates seed separate starting hypotheses,
+    # How many of the top snap candidates seed separate starting hypotheses,
     # instead of the greedy tracker's single best-plus-ambiguity-flag.
     n_start_hypotheses: int = 3
 
@@ -138,36 +138,16 @@ class HMMMapMatchedPredictor(MapMatchedPredictor):
         out to explain the observed turns better.
         """
         cfg = self.cfg
-        deg = None if heading is None else float(np.degrees(heading)) % 360.0
-        wps = self.osrm.nearest(lat, lon, number=cfg.n_candidates, bearing=deg,
-                                bearing_range=cfg.osrm_bearing_range_deg,
-                                radius_m=cfg.snap_radius_m)
-        if not wps:
-            wps = self.osrm.nearest(lat, lon, number=cfg.n_candidates,
-                                    radius_m=cfg.snap_radius_m)
-        if not wps:
-            return []
-
-        out = []
-        for w in wps:
-            loc = w.get("location") or [lon, lat]
-            wl, wn = float(loc[1]), float(loc[0])
-            nodes = w.get("nodes") or []
-            pos = None
-            if len(nodes) >= 2 and nodes[0] and nodes[1]:
-                pos = self.graph.locate_node_pair(nodes[0], nodes[1], wl, wn,
-                                                  heading)
-            if pos is None:
-                pos = self.graph.locate(wl, wn, heading,
-                                        radius_m=cfg.snap_radius_m)
-            if pos is None:
-                continue
-            dist = float(w.get("distance", 0.0))
-            out.append((pos, -dist / max(cfg.snap_radius_m, 1e-6)))
+        # Backend-agnostic: `_candidates` is inherited from
+        # MapMatchedPredictor and dispatches to the graph or OSRM. The beam
+        # therefore runs offline for free, with no OSRM code of its own.
+        out = [(pos, -dist / max(cfg.snap_radius_m, 1e-6))
+               for pos, dist in self._candidates(lat, lon, heading)
+               if pos is not None]
         if not out:
             return []
         n_start = getattr(cfg, "n_start_hypotheses", 3)
-        # Sort BEFORE truncating. `out` is built in OSRM's candidate order and
+        # Sort BEFORE truncating. `out` is built in candidate order and
         # entries are skipped when they fail to locate, so the first n are not
         # the n nearest -- slicing unsorted can seed the beam with the worst
         # candidates and drop the best.

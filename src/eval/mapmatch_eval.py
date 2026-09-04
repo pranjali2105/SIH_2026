@@ -15,8 +15,10 @@ Run:  python -m eval.mapmatch_eval [--checkpoint results/training/best_ma3.pt]
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -49,10 +51,23 @@ BENCH_TARGET_M = 100.0
 
 
 def load_model(path: Path, device: str):
+    """Rebuild whichever architecture the checkpoint was trained with.
+
+    Hardcoding ResNet1D here silently rejected every TCN checkpoint, which is
+    the family the final model belongs to. The architecture is recorded in the
+    checkpoint's own config, so read it from there.
+    """
     import torch
-    from model.resnet1d import ResNet1D
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    model = ResNet1D().to(device)
+    cfg = ckpt.get("config", {})
+    widths = tuple(cfg.get("widths", (64, 128, 256, 512)))
+    if cfg.get("arch") == "tcn":
+        from model.tcn_model import TCNModel
+        model = TCNModel(stem_width=cfg.get("stem_width", 64),
+                         channels=widths).to(device)
+    else:
+        from model.resnet1d import ResNet1D
+        model = ResNet1D(widths=widths).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, ckpt
@@ -85,13 +100,17 @@ def score_session(session, predictors, durations, rows, skips):
 
 
 def build_predictors(session, graph, osrm, cfg, model, ckpt, device,
-                     hmm_cfg=None):
+                     hmm_cfg=None, backends=("graph",)):
     """Baselines, and each wrapped in the along-road tracker.
 
-    Every inner predictor is wrapped TWICE: once through the existing
-    greedy tracker (`map_matched_X`) and once through the beam-search
+    Every inner predictor is wrapped TWICE per backend: once through the
+    existing greedy tracker (`map_matched_X`) and once through the beam-search
     tracker (`hmm_matched_X`, see `mapmatch.hmm_predictor`), so a single run
     of this script puts them side by side on the same outages.
+
+    The backend is ALWAYS in the predictor name, even for a single-backend
+    run. A row name that silently means a different thing between invocations
+    is exactly the failure this is meant to prevent.
     """
     inner = {"constant_velocity_dr": ConstantVelocityDR(session),
              "ins_dr": INSDeadReckoning(session)}
@@ -108,15 +127,22 @@ def build_predictors(session, graph, osrm, cfg, model, ckpt, device,
         from fusion.predictor import SpeedFusedPredictor
         inner["model_speed_fused"] = SpeedFusedPredictor(inner["model"], session)
     preds = dict(inner)
-    for name, p in inner.items():
-        mm = MapMatchedPredictor(p, session, graph, osrm, cfg)
-        mm.name = f"map_matched_{name}"
-        preds[mm.name] = mm
+    for backend in backends:
+        b_cfg = replace(cfg, backend=backend)
+        # The OSRM client is handed over ONLY to the osrm backend. On the
+        # graph backend it is None, so a stray `self.osrm` reference raises
+        # instead of quietly working because a client happened to be around.
+        b_osrm = osrm if backend == "osrm" else None
+        for name, p in inner.items():
+            mm = MapMatchedPredictor(p, session, graph, b_osrm, b_cfg)
+            mm.name = f"map_matched_{backend}_{name}"
+            preds[mm.name] = mm
 
-        hmm = HMMMapMatchedPredictor(p, session, graph, osrm,
-                                     hmm_cfg or HMMMapMatchConfig(**vars(cfg)))
-        hmm.name = f"hmm_matched_{name}"
-        preds[hmm.name] = hmm
+            h_cfg = (replace(hmm_cfg, backend=backend) if hmm_cfg is not None
+                     else HMMMapMatchConfig(**vars(b_cfg)))
+            hmm = HMMMapMatchedPredictor(p, session, graph, b_osrm, h_cfg)
+            hmm.name = f"hmm_matched_{backend}_{name}"
+            preds[hmm.name] = hmm
     return preds
 
 
@@ -161,7 +187,16 @@ def main(argv=None) -> int:
     ap.add_argument("--turn-window-s", type=float, default=4.0)
     ap.add_argument("--max-gps-accuracy-m", type=float, default=20.0)
     ap.add_argument("--durations", type=float, nargs="*", default=list(DURATIONS))
+    ap.add_argument("--backend", choices=("graph", "osrm", "both"),
+                    default="both",
+                    help="candidate source: 'graph' is fully in-process "
+                         "(no server, no HTTP); 'osrm' needs a local "
+                         "osrm-routed; 'both' scores them side by side")
     args = ap.parse_args(argv)
+
+    backends = (("graph", "osrm") if args.backend == "both"
+                else (args.backend,))
+    need_osrm = "osrm" in backends
 
     if GRAPH_CACHE.exists():
         graph = RoadGraph.load(GRAPH_CACHE)
@@ -189,13 +224,20 @@ def main(argv=None) -> int:
 
     rows, skips = [], []
     tracker: dict = defaultdict(dict)
-    with OSRMClient(Path(args.dataset)) as osrm:
+    # Only construct the client when a backend actually needs it:
+    # OSRMClient.__enter__ starts the subprocess unconditionally, so a
+    # graph-only run must not enter the context at all.
+    if not need_osrm:
+        print("backend=graph: no osrm-routed process, no HTTP", file=sys.stderr)
+    osrm_ctx = (OSRMClient(Path(args.dataset)) if need_osrm
+                else contextlib.nullcontext())
+    with osrm_ctx as osrm:
         for r in sessions.itertuples():
             name = f"{r.family}-{r.session}"
             print(f"  {name}", file=sys.stderr)
             s = load_session(name, check_rate=False)
             preds = build_predictors(s, graph, osrm, cfg, model, ckpt,
-                                     args.device)
+                                     args.device, backends=backends)
             score_session(s, preds, args.durations, rows, skips)
             for pname, p in preds.items():
                 if hasattr(p, "stats"):

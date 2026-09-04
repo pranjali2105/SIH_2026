@@ -63,7 +63,7 @@ src/data/      loading, splits, sanity checks, windowing
 src/baseline/  INS dead reckoning, constant-velocity DR, feature probes
 src/model/     1-D ResNet, multi-task losses, calibration
 src/fusion/    non-holonomic ESKF (attempted; see findings §8)
-src/mapmatch/  offline OSRM extract, road graph, along-road tracker
+src/mapmatch/  in-process road graph and along-road tracker (OSRM optional)
 src/eval/      outage harness, metrics, speed-bucket reporting
 tests/         109 tests
 ```
@@ -84,6 +84,12 @@ python -m mapmatch.build_map      # ~660 MB of Geofabrik county extracts
 It derives the bounding box from the four Volvo test sessions, selects the UK
 county extracts that intersect it *from Geofabrik's published region index*
 rather than a hand-written list, crops, and runs the OSRM MLD pipeline.
+
+Map matching runs **fully in-process** by default (`--backend graph`): no
+`osrm-routed` subprocess, no HTTP, no localhost — just `road_graph.npz`. OSRM
+is retained as a comparison backend (`--backend osrm`, or `both` to score them
+side by side). Measured on the test split, the two agree to within 2.3 m of
+mean 60 s drift, with the graph backend marginally ahead.
 Afterwards nothing touches the network: `osrm-routed` is a child process bound
 to 127.0.0.1, and a non-loopback host raises `OfflineViolation` rather than
 being used.

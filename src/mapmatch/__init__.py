@@ -8,6 +8,10 @@ Three pieces, each usable on its own:
                  only; there is no network at inference.
 * `graph`     -- the drivable road graph (polylines + junction adjacency)
                  read from the same cropped extract OSRM was built from.
+                 This is the DEPLOYABLE path: matching runs in-process
+                 against road_graph.npz with no server. OSRM remains
+                 available as a comparison backend via MapMatchConfig
+                 (backend="osrm").
 * `predictor` -- `MapMatchedPredictor`, a harness predictor that turns a
                  displacement model into an along-road tracker.
 """

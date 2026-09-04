@@ -45,7 +45,12 @@ def run_variant(sessions, graph, osrm, cfg, stride: float):
     drifts, skipped, scored = [], 0, 0
     stats = {}
     for s in sessions:
-        pred = MapMatchedPredictor(ConstantVelocityDR(s), s, graph, osrm, cfg)
+        # Hand the client over only to the osrm backend; on the graph
+        # backend it is None so a stray reference raises rather than
+        # silently working.
+        pred = MapMatchedPredictor(
+            ConstantVelocityDR(s), s, graph,
+            osrm if getattr(cfg, "backend", "graph") == "osrm" else None, cfg)
         for t0 in iter_outages(s, DURATION, stride):
             try:
                 r = run_outage(s, t0, DURATION, pred)
@@ -72,6 +77,9 @@ def run_variant(sessions, graph, osrm, cfg, stride: float):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dataset", default=str(DEFAULT_DATASET))
+    ap.add_argument("--backend", choices=("graph", "osrm"), default="graph",
+                    help="candidate source; 'graph' needs no server and is "
+                         "much faster over a 17-variant sweep")
     ap.add_argument("--stride", type=float, default=120.0,
                     help="outage spacing; wider than the outage to keep the "
                          "sweep cheap while covering the whole session")
@@ -92,20 +100,25 @@ def main(argv=None) -> int:
     for c in (1.0, 5.0, 10.0, 20.0, NEVER):
         label = "never" if c == NEVER else f"{c:g} s"
         variants.append(("re-match cadence", label,
-                         MapMatchConfig(rematch_every_s=c)))
+                         MapMatchConfig(backend=args.backend, rematch_every_s=c)))
     for w in (2.0, 3.0, 4.0, 5.0, 8.0):
         variants.append(("gyro turn window", f"{w:g} s",
-                         MapMatchConfig(turn_window_s=w)))
+                         MapMatchConfig(backend=args.backend, turn_window_s=w)))
     for lead in (0.0, 1.0, 2.0):
         variants.append(("gyro window lead", f"+{lead:g} s",
-                         MapMatchConfig(turn_lead_s=lead)))
+                         MapMatchConfig(backend=args.backend, turn_lead_s=lead)))
     for a in (10.0, 20.0, 50.0, 1e9):
         label = "no gate" if a > 1e8 else f"{a:g} m"
         variants.append(("start-fix GPS gate", label,
-                         MapMatchConfig(max_gps_accuracy_m=a)))
+                         MapMatchConfig(backend=args.backend, max_gps_accuracy_m=a)))
 
     rows = []
-    with OSRMClient(Path(args.dataset)) as osrm:
+    import contextlib
+    need_osrm = args.backend == "osrm"
+    if not need_osrm:
+        print("backend=graph: no osrm-routed process, no HTTP", file=sys.stderr)
+    with (OSRMClient(Path(args.dataset)) if need_osrm
+          else contextlib.nullcontext()) as osrm:
         for group, label, cfg in variants:
             print(f"  {group}: {label}", file=sys.stderr)
             res = run_variant(sessions, graph, osrm, cfg, args.stride)
