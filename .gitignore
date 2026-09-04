@@ -1,5 +1,7 @@
-# Data (never committed)
-data/
+# Datasets (never committed). ANCHORED with a leading slash: a bare `data/`
+# matches at ANY depth, which silently excluded the src/data/ SOURCE package
+# and left the repo unable to import its own loader.
+/data/
 
 # Python
 __pycache__/
