@@ -30,6 +30,7 @@ from data.loader import list_sessions, load_session
 from eval.harness import iter_outages, run_session
 from mapmatch.graph import RoadGraph
 from mapmatch.hmm_predictor import HMMMapMatchConfig, HMMMapMatchedPredictor
+from mapmatch.viterbi import ViterbiConfig, ViterbiMapMatcher
 from mapmatch.osrm import DEFAULT_DATASET, OSRMClient
 from mapmatch.predictor import MapMatchConfig, MapMatchedPredictor
 
@@ -143,6 +144,15 @@ def build_predictors(session, graph, osrm, cfg, model, ckpt, device,
             hmm = HMMMapMatchedPredictor(p, session, graph, b_osrm, h_cfg)
             hmm.name = f"hmm_matched_{backend}_{name}"
             preds[hmm.name] = hmm
+
+            # Full HMM with per-second emissions, decoded by Viterbi. Unlike
+            # the beam above, hypotheses accumulate evidence after a fork, so
+            # its route is not pinned to the greedy one.
+            v_cfg = ViterbiConfig(**{k: v for k, v in vars(h_cfg).items()
+                                     if k in ViterbiConfig.__dataclass_fields__})
+            vit = ViterbiMapMatcher(p, session, graph, b_osrm, v_cfg)
+            vit.name = f"viterbi_matched_{backend}_{name}"
+            preds[vit.name] = vit
     return preds
 
 

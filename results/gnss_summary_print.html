@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Navigation Without Satellites</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  :root{
+    /* Land, ink and roads — sampled from OpenStreetMap carto, which is the
+       map this system actually snaps to. */
+    --paper:#F6F7F5;
+    --surface:#FFFFFF;
+    --rule:#D9DCD6;
+    --ink:#16202B;
+    --muted:#5C6B7A;
+    --accent:#C2703D;   /* trunk-road ochre */
+    --good:#2E7D6B;     /* our system */
+    --warn:#B4453A;     /* drift, error */
+    --grid:#E3E6E0;
+    --shadow:rgba(22,32,43,.07);
+    --measure:66ch;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#12171C; --surface:#1A2027; --rule:#2C353E;
+      --ink:#E7ECEF; --muted:#9AA8B4;
+      --accent:#E09A63; --good:#5FBBA4; --warn:#E0736A;
+      --grid:#242D35; --shadow:rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#12171C; --surface:#1A2027; --rule:#2C353E;
+    --ink:#E7ECEF; --muted:#9AA8B4;
+    --accent:#E09A63; --good:#5FBBA4; --warn:#E0736A;
+    --grid:#242D35; --shadow:rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Source Serif 4",Georgia,serif;
+    font-size:16.5px; line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 32px 80px}
+  .col{max-width:var(--measure)}
+
+  h1,h2,h3,.label,.tick,.metric{font-family:Archivo,"Helvetica Neue",Arial,sans-serif}
+  h1{
+    font-size:clamp(30px,4.4vw,46px); line-height:1.06; font-weight:700;
+    letter-spacing:-.021em; margin:0 0 14px; text-wrap:balance;
+  }
+  h2{
+    font-size:20px; font-weight:600; letter-spacing:-.008em;
+    margin:0 0 10px; text-wrap:balance;
+  }
+  h3{font-size:15px;font-weight:600;margin:0 0 6px}
+  p{margin:0 0 14px}
+  .lede{font-size:19px;line-height:1.55;color:var(--muted);margin:0 0 8px}
+  .label{
+    font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);
+  }
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+  strong{font-weight:600}
+  a{color:var(--accent)}
+
+  header{border-bottom:2px solid var(--ink);padding-bottom:22px;margin-bottom:30px}
+  .meta{
+    display:flex;flex-wrap:wrap;gap:20px;margin-top:16px;
+    font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted);
+  }
+
+  /* Sections are numbered because the pipeline genuinely is a sequence. */
+  section{margin:0 0 34px}
+  .head{display:flex;gap:14px;align-items:baseline;margin-bottom:12px}
+  .num{
+    font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:500;
+    color:var(--accent);padding-top:3px;flex:none;
+  }
+
+  .flow{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:1px;background:var(--rule);border:1px solid var(--rule);margin:20px 0 4px;
+  }
+  .step{background:var(--surface);padding:13px 15px}
+  .step .label{display:block;margin-bottom:5px;color:var(--accent)}
+  .step p{margin:0;font-size:13.5px;line-height:1.45;color:var(--muted)}
+
+  figure{margin:26px 0 8px}
+  figure svg{display:block;width:100%;height:auto}
+  figcaption{
+    font-size:13px;color:var(--muted);margin-top:10px;max-width:64ch;
+    line-height:1.5;
+  }
+  .band{background:var(--surface);border:1px solid var(--rule);padding:22px 24px 18px}
+
+  table{border-collapse:collapse;width:100%;font-size:14px;margin:6px 0 4px}
+  caption{text-align:left;font-size:13px;color:var(--muted);padding-bottom:8px}
+  th,td{padding:7px 12px 7px 0;text-align:left;border-bottom:1px solid var(--rule)}
+  th{font-family:Archivo,sans-serif;font-size:11px;font-weight:600;
+     letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+  td.n,th.n{text-align:right;font-family:"IBM Plex Mono",monospace;
+     font-variant-numeric:tabular-nums}
+  tr.hi td{color:var(--good);font-weight:600}
+  .scroll{overflow-x:auto}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:26px}
+
+  .verdict{
+    border-left:3px solid var(--accent);padding:2px 0 2px 16px;margin:18px 0;
+  }
+  .verdict p{margin:0}
+
+  ul{margin:0 0 14px;padding-left:20px}
+  li{margin-bottom:7px}
+  li::marker{color:var(--accent)}
+
+  footer{
+    margin-top:44px;padding-top:18px;border-top:1px solid var(--rule);
+    font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--muted);
+  }
+  @media (prefers-reduced-motion:no-preference){
+    .step{transition:none}
+  }
+</style>
+
+<style>
+  @page { size: A4; margin: 14mm 15mm; }
+  @media print {
+    :root, :root[data-theme="dark"], :root:not([data-theme="light"]) {
+      --paper:#FFFFFF; --surface:#FBFBF9; --rule:#D9DCD6;
+      --ink:#16202B; --muted:#55636F;
+      --accent:#B4602F; --good:#226B5A; --warn:#A63B31;
+      --grid:#E3E6E0;
+    }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    body { font-size: 10pt; line-height: 1.45; background:#fff; }
+    .wrap { max-width:none; padding:0; }
+    :root { --measure: 100%; }
+    header { padding-bottom:9px; margin-bottom:12px; }
+    h1 { font-size: 21pt; margin-bottom:5px; letter-spacing:-.02em; }
+    .lede { font-size: 11.4pt; line-height:1.42; margin-bottom:4px; }
+    .meta { font-size: 8.2pt; gap: 12px; margin-top:8px; }
+    h2 { font-size: 12.6pt; margin-bottom:4px; }
+    h3 { font-size: 10.6pt; }
+    .num { font-size: 8pt; }
+    .head { margin-bottom:5px; gap:9px; }
+    section { margin-bottom: 15px; }
+    p { margin-bottom: 8px; }
+    ul { margin-bottom:6px; padding-left:15px; }
+    li { margin-bottom: 5px; }
+    .flow { margin:10px 0 2px; grid-template-columns:repeat(5,1fr); }
+    .step { padding: 7px 8px; }
+    .step p { font-size:8.6pt; line-height:1.36; }
+    .label { font-size:7pt; letter-spacing:.08em; }
+    figure, .flow, table, .verdict { break-inside: avoid; page-break-inside: avoid; }
+    /* Never strand a section heading at the foot of a page. */
+    .head, h2, h3 { break-after: avoid; page-break-after: avoid; }
+    p, li { orphans: 2; widows: 2; }
+    figure { margin: 9px 0 3px; }
+    .band { padding: 9px 11px 7px; }
+    figcaption { font-size: 8.8pt; margin-top:4px; line-height:1.35; }
+    .grid2 { gap: 14px; }
+    table { font-size:9.4pt; margin:3px 0 2px; }
+    th,td { padding:3.5px 9px 3.5px 0; }
+    caption { font-size:7.4pt; padding-bottom:4px; }
+    .verdict { margin:9px 0; padding-left:11px; }
+    footer { margin-top: 18px; padding-top:10px; font-size: 8.2pt; }
+    /* Cap chart height: an SVG at full column width is ~85mm tall, and three
+       of those alone overflow a two-page budget. */
+    figure svg { max-height: 68mm; width:auto; max-width:100%; display:block;
+                 margin:0 auto; }
+    .grid2 figure svg { max-height: 56mm; }
+  }
+</style>
+
+</head>
+<body>
+
+
+<div class="wrap">
+
+<header>
+  <div class="label">Smart India Hackathon 2026 &middot; Draft technical summary</div>
+  <h1>Navigating a vehicle when the satellites go away</h1>
+  <p class="lede col">A smartphone-only dead-reckoning pipeline for GNSS outages, built on
+  IO-VNBD and measured end to end against baselines that read no inertial data at all.</p>
+  <div class="meta">
+    <span>187 sessions &middot; 149 k windows</span>
+    <span>78,982-parameter TCN</span>
+    <span>60 s outage &middot; test split</span>
+    <span>5 September 2026</span>
+  </div>
+</header>
+
+<section>
+  <div class="head"><span class="num">01</span><div>
+    <h2>What the system does</h2></div></div>
+  <div class="col">
+    <p>When GNSS drops out &mdash; a tunnel, an urban canyon, a multi-storey car park &mdash;
+    the vehicle has to keep knowing where it is from the phone in the cradle and nothing else.
+    Our pipeline predicts <strong>how far the vehicle travels each second</strong> from a
+    3-second window of accelerometer and gyroscope data, then walks that distance along the
+    road network to produce a position.</p>
+    <p>The separation matters. Distance comes from the learned model; direction comes from the
+    map. Nothing integrates heading over the length of the outage, which is where classical
+    inertial navigation loses its position.</p>
+  </div>
+
+  <div class="flow">
+    <div class="step"><span class="label">Sensors</span>
+      <p>6 channels at 10 Hz, rotated into a gravity-levelled frame so only mount yaw is unknown.</p></div>
+    <div class="step"><span class="label">Model</span>
+      <p>Dilated TCN over a 3 s window &rarr; displacement, its uncertainty, and a stationary flag.</p></div>
+    <div class="step"><span class="label">Road graph</span>
+      <p>6.7 M-point OpenStreetMap graph, in-process. No server, no network.</p></div>
+    <div class="step"><span class="label">Tracker</span>
+      <p>Advance the predicted distance along the matched road; gyro only picks the branch at junctions.</p></div>
+    <div class="step"><span class="label">Harness</span>
+      <p>Simulated outages at 10 / 30 / 60 s, scored against GPS truth.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="head"><span class="num">02</span><div>
+    <h2>Data and labels</h2></div></div>
+  <div class="col">
+    <p>IO-VNBD, 187 unique sessions across four vehicles and three phones. Splits are assigned
+    by vehicle and phone &mdash; never randomly &mdash; because windows overlap by nine of their
+    ten seconds and a random split would put near-duplicates on both sides.</p>
+    <p>The label is displacement over the following second, taken from cumulative geodesic
+    distance between GPS fixes. It is an integral of position, never a differentiated speed:
+    differentiating a 1 Hz quantised signal to make a 10 Hz reference amplifies its noise, and
+    we measured the ceiling that imposes &mdash; even a <em>perfect</em> ECU accelerometer only
+    reaches r&nbsp;=&nbsp;0.12&ndash;0.58 against such a reference, against 0.93 for clean
+    wheel speed.</p>
+    <p>Two standing guards protect the labels. Any window implying more than 60 m/s is
+    rejected, and any session whose fix-to-fix path length disagrees with the integral of its
+    own speedometer by more than a set margin is refused outright &mdash; that caught four
+    sessions whose GPS positions were inflated by 2.1&times; to 3.5&times;.</p>
+  </div>
+  <div class="scroll">
+  <table>
+    <caption>Windows per split, after both guards. Displacement over 1 s is numerically the
+    mean speed, so the label is its own regime key.</caption>
+    <thead><tr><th>Split</th><th class="n">Sessions</th><th class="n">Windows</th>
+      <th class="n">Mean label</th><th class="n">Rejected</th></tr></thead>
+    <tbody>
+      <tr><td>train</td><td class="n">47</td><td class="n">83,238</td><td class="n">13.85 m</td><td class="n">0.11%</td></tr>
+      <tr><td>validate</td><td class="n">7</td><td class="n">38,117</td><td class="n">24.63 m</td><td class="n">0.05%</td></tr>
+      <tr><td>test</td><td class="n">4</td><td class="n">27,937</td><td class="n">19.67 m</td><td class="n">0.00%</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <div class="head"><span class="num">03</span><div>
+    <h2>The model</h2></div></div>
+  <div class="grid2">
+    <div>
+      <p>A convolutional stem feeding four causal dilated residual blocks (dilations 1, 2, 4, 8),
+      global-average pooled into three heads: displacement with a predicted log-variance, a
+      stationary logit, and a yaw-rate output. <strong>78,982 parameters</strong> &mdash; 49&times;
+      smaller than the 1-D ResNet it replaced, and better on every measure.</p>
+      <p>Training is two-phase: a plain-MSE warm-up so the variance head cannot buy loss
+      reduction before the mean is calibrated, then the full multi-task objective. Early
+      stopping is on <strong>60-second drift through the outage harness</strong>, not windowed
+      error &mdash; small, consistently-signed per-window errors accumulate into large drift,
+      so windowed MAE can improve while the deployable quantity gets worse.</p>
+    </div>
+    <figure class="band" style="margin:0">
+      <div class="label" style="margin-bottom:12px">Smaller model, lower drift</div>
+      <svg viewBox="0 0 340 232" role="img" aria-label="Scatter of parameter count against 60-second test drift. The 79-thousand-parameter TCN reaches the lowest drift; the 3.85-million-parameter ResNets are worst.">
+        <g stroke="var(--grid)" stroke-width="1">
+          <line x1="50" y1="180" x2="316" y2="180"></line>
+          <line x1="50" y1="105" x2="316" y2="105"></line>
+          <line x1="50" y1="30" x2="316" y2="30"></line>
+        </g>
+        <g class="tick" fill="var(--muted)" font-size="10" font-family="IBM Plex Mono, monospace">
+          <text x="44" y="183" text-anchor="end">500</text>
+          <text x="44" y="108" text-anchor="end">600</text>
+          <text x="44" y="33" text-anchor="end">700</text>
+          <text x="63" y="200" text-anchor="middle">79 k</text>
+          <text x="212" y="200" text-anchor="middle">0.97 M</text>
+          <text x="294" y="200" text-anchor="middle">3.85 M</text>
+          <text x="183" y="219" text-anchor="middle" fill="var(--muted)">parameters</text>
+          <text x="14" y="105" text-anchor="middle" transform="rotate(-90 14 105)">60 s drift (m)</text>
+        </g>
+        <circle cx="294" cy="69" r="5" fill="var(--warn)"></circle>
+        <circle cx="294" cy="95" r="5" fill="var(--warn)"></circle>
+        <circle cx="212" cy="96" r="5" fill="var(--warn)"></circle>
+        <circle cx="63" cy="120" r="5" fill="var(--accent)"></circle>
+        <circle cx="63" cy="146" r="6.5" fill="var(--good)"></circle>
+        <text x="76" y="149" font-size="11" font-family="Archivo, sans-serif"
+              font-weight="600" fill="var(--good)">TCN &mdash; 546 m</text>
+        <text x="286" y="60" font-size="10.5" font-family="Archivo, sans-serif"
+              fill="var(--warn)" text-anchor="end">ResNet &mdash; 649 m</text>
+      </svg>
+      <figcaption style="margin-top:6px">Every ResNet variant we trained sits above every TCN
+      variant, at up to 49&times; the parameter count.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <div class="head"><span class="num">04</span><div>
+    <h2>Validating the measuring instrument first</h2></div></div>
+  <div class="col">
+    <p>Before trusting any learned result we reproduced a published one. Onyekpe et&nbsp;al.
+    (2021) report classical INS dead reckoning on IO-VNBD across five driving scenarios; our
+    implementation reproduces the sequence counts almost exactly (9/9, 12/11, 15/13, 15/17,
+    35/40) and lands within 30% on three of five, with the difficulty ordering preserved
+    &mdash; motorway lowest, roundabout highest.</p>
+    <p>That ordering test earned its keep immediately: it caught a defect in our own metric.
+    Reading CRSE as the scalar sum of per-second distance errors <em>inverts</em> the published
+    ordering, making the motorway the hardest scenario. It has to be the norm of the accumulated
+    error <em>vector</em> &mdash; a scalar sum cannot see heading error at all. Magnitudes alone
+    would never have exposed that.</p>
+  </div>
+</section>
+
+<section>
+  <div class="head"><span class="num">05</span><div>
+    <h2>Results</h2></div></div>
+
+  <figure class="band">
+    <div class="label" style="margin-bottom:14px">Mean position drift by outage length &middot; test split, 417 outages</div>
+    <svg viewBox="0 0 720 330" role="img" aria-label="Line chart of mean drift against outage duration. Our raw model reaches 606 metres at 60 seconds; map matching brings it to 323; constant-velocity dead reckoning is 285, and map-matched constant-velocity is 120.">
+      <g stroke="var(--grid)" stroke-width="1">
+        <line x1="70" y1="280" x2="560" y2="280"></line>
+        <line x1="70" y1="203" x2="560" y2="203"></line>
+        <line x1="70" y1="126" x2="560" y2="126"></line>
+        <line x1="70" y1="49" x2="560" y2="49"></line>
+      </g>
+      <g class="tick" fill="var(--muted)" font-size="11" font-family="IBM Plex Mono, monospace">
+        <text x="62" y="284" text-anchor="end">0</text>
+        <text x="62" y="207" text-anchor="end">200</text>
+        <text x="62" y="130" text-anchor="end">400</text>
+        <text x="62" y="53" text-anchor="end">600</text>
+        <text x="70" y="301" text-anchor="middle">10 s</text>
+        <text x="266" y="301" text-anchor="middle">30 s</text>
+        <text x="560" y="301" text-anchor="middle">60 s</text>
+        <text x="315" y="320" text-anchor="middle">outage duration</text>
+        <text x="20" y="165" text-anchor="middle" transform="rotate(-90 20 165)">mean drift (m)</text>
+      </g>
+
+      <polyline points="70,254.3 266,185.7 560,46.8" fill="none" stroke="var(--warn)" stroke-width="2.5"></polyline>
+      <polyline points="70,256.9 266,215.5 560,155.9" fill="none" stroke="var(--good)" stroke-width="2.5"></polyline>
+      <polyline points="70,273.0 266,242.0 560,170.2" fill="none" stroke="var(--ink)" stroke-width="1.6" stroke-dasharray="5 4"></polyline>
+      <polyline points="70,275.4 266,262.2 560,234.0" fill="none" stroke="var(--accent)" stroke-width="2.5"></polyline>
+
+      <g>
+        <circle cx="560" cy="46.8" r="4" fill="var(--warn)"></circle>
+        <circle cx="560" cy="155.9" r="4" fill="var(--good)"></circle>
+        <circle cx="560" cy="170.2" r="4" fill="var(--ink)"></circle>
+        <circle cx="560" cy="234.0" r="4" fill="var(--accent)"></circle>
+      </g>
+      <g font-size="11.5" font-family="Archivo, sans-serif" font-weight="600">
+        <text x="572" y="44" fill="var(--warn)">Model alone</text>
+        <text x="572" y="57" fill="var(--muted)" font-weight="400" font-size="10.5">606 m</text>
+        <text x="572" y="153" fill="var(--good)">Model + map</text>
+        <text x="572" y="166" fill="var(--muted)" font-weight="400" font-size="10.5">323 m</text>
+        <text x="572" y="185" fill="var(--ink)">Const-velocity DR</text>
+        <text x="572" y="198" fill="var(--muted)" font-weight="400" font-size="10.5">285 m &middot; no IMU</text>
+        <text x="572" y="232" fill="var(--accent)">Const-vel + map</text>
+        <text x="572" y="245" fill="var(--muted)" font-weight="400" font-size="10.5">120 m</text>
+      </g>
+    </svg>
+    <figcaption>Map matching roughly halves drift for every predictor, and the benefit grows
+    with outage length &mdash; the signature of removing accumulated heading error. The dashed
+    line is the baseline that reads no inertial data at all.</figcaption>
+  </figure>
+
+  <div class="col" style="margin-top:26px">
+    <h3>Where the remaining error actually lives</h3>
+    <p>Substituting oracle GPS heading into the model &mdash; changing nothing else &mdash;
+    takes 60-second drift from 606 m to 214 m. That single substitution accounts for roughly
+    two-thirds of the gap, and it puts the model <em>ahead</em> of the no-IMU baseline. The
+    displacement estimate is sound; heading is what costs us.</p>
+  </div>
+
+  <figure class="band">
+    <div class="label" style="margin-bottom:14px">60-second drift, decomposed &middot; lower is better</div>
+    <svg viewBox="0 0 720 300" role="img" aria-label="Horizontal bars of 60-second drift. Model alone 606 metres, classical INS 311, model with map matching 323, constant-velocity 285, model with oracle heading 214, constant-velocity with map matching 120.">
+      <line x1="435.6" y1="24" x2="435.6" y2="272" stroke="var(--ink)" stroke-width="1" stroke-dasharray="4 4"></line>
+      <text x="440" y="20" font-size="10.5" font-family="IBM Plex Mono, monospace" fill="var(--muted)">baseline to beat &mdash; 285 m</text>
+
+      <g font-family="Archivo, sans-serif" font-size="12.5" fill="var(--ink)">
+        <text x="250" y="49" text-anchor="end">Our model alone</text>
+        <text x="250" y="89" text-anchor="end">Model + map matching</text>
+        <text x="250" y="129" text-anchor="end">Classical INS DR</text>
+        <text x="250" y="169" text-anchor="end">Constant-velocity DR</text>
+        <text x="250" y="209" text-anchor="end">Model + oracle heading</text>
+        <text x="250" y="249" text-anchor="end">Const-velocity + map</text>
+      </g>
+      <g>
+        <rect x="260" y="34" width="373.2" height="20" fill="var(--warn)"></rect>
+        <rect x="260" y="74" width="198.6" height="20" fill="var(--good)"></rect>
+        <rect x="260" y="114" width="191.1" height="20" fill="var(--muted)"></rect>
+        <rect x="260" y="154" width="175.6" height="20" fill="var(--muted)"></rect>
+        <rect x="260" y="194" width="131.9" height="20" fill="var(--good)" opacity=".55"></rect>
+        <rect x="260" y="234" width="73.6" height="20" fill="var(--accent)"></rect>
+      </g>
+      <g font-family="IBM Plex Mono, monospace" font-size="11.5" fill="var(--ink)">
+        <text x="641" y="49">606 m</text>
+        <text x="467" y="89">323 m</text>
+        <text x="459" y="129">311 m</text>
+        <text x="444" y="169">285 m</text>
+        <text x="400" y="209">214 m</text>
+        <text x="342" y="249">120 m</text>
+      </g>
+      <text x="260" y="284" font-size="10.5" font-family="IBM Plex Mono, monospace" fill="var(--muted)">
+        oracle heading is an upper bound, not a deployable result &mdash; true heading is exactly what an outage removes</text>
+    </svg>
+  </figure>
+</section>
+
+<section>
+  <div class="head"><span class="num">06</span><div>
+    <h2>Honest position</h2></div></div>
+  <div class="col">
+    <div class="verdict">
+      <p><strong>The learned model does not yet beat a baseline that reads no IMU at all.</strong>
+      Map-matched, we are at 323 m against 120 m for map-matched constant-velocity dead
+      reckoning. That is the number to state plainly.</p>
+    </div>
+    <p>What the diagnostics establish is <em>why</em>, which is a more useful position than a
+    single figure. Three findings, each measured rather than assumed:</p>
+    <ul>
+      <li><strong>The dominant cue is vehicle- and surface-dependent.</strong> Vertical
+      acceleration variance rises monotonically with speed on train and test, but
+      <em>inverts</em> on validate &mdash; the Renault/Moto&nbsp;G7/French-motorway pairing
+      simply does not produce proportional vibration at speed. Removing that channel doubles
+      error everywhere, so it is not an incidental feature the model could route around.</li>
+      <li><strong>The learned yaw head is worse than the raw gyro</strong> on held-out test
+      &mdash; 647 m against 939 m. It is disabled in the shipped configuration. Three of four
+      heads earn their place; one does not.</li>
+      <li><strong>Mount orientation is not identifiable during an outage.</strong> Three
+      independent attempts failed at the same point, and measurement explains it: the mount
+      yaw estimate moves 13&ndash;36&deg; <em>within</em> a session, 5.5&ndash;11&times; the
+      estimator&rsquo;s own noise.</li>
+    </ul>
+    <p>Several plausible fixes were tried and did not work: bucket reweighting, post-hoc
+    calibration, despiking, ZUPT gating, a non-holonomic EKF. Each is recorded with the
+    measurement that ruled it out, so nobody repeats them.</p>
+  </div>
+</section>
+
+<section>
+  <div class="head"><span class="num">07</span><div>
+    <h2>What we would do next</h2></div></div>
+  <div class="col">
+    <ul>
+      <li><strong>Heading, not displacement.</strong> The oracle bound says solving heading is
+      worth roughly 390 m of the gap. Road-network priors over a longer horizon are the
+      obvious route, and the in-process graph already supports it.</li>
+      <li><strong>Training data spanning more road surfaces</strong>, to break the dependence
+      on a vibration cue that does not transfer between vehicles.</li>
+      <li><strong>Drop the pyproj dependency</strong> &mdash; it wraps a C library and is the
+      remaining blocker to embedding the matcher on a phone, now that the routing server is
+      gone.</li>
+    </ul>
+    <p>Map matching runs fully in-process against a cached road graph: no routing server, no
+    HTTP, no network at inference. Scored side by side against the OSRM-backed path, the two
+    agree to within 2.3 m of mean 60-second drift, with the in-process backend marginally
+    ahead.</p>
+  </div>
+</section>
+
+<footer>
+  Draft &middot; figures from results/mapmatch.csv, results/run_comparison.csv and
+  results/stage0_validation.csv &middot; 165 tests passing &middot; full negative-result log in
+  results/findings.md
+</footer>
+
+</div>
+
+</body>
+</html>
