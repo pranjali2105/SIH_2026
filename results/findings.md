@@ -448,6 +448,86 @@ physically plausible magnitude caught this; drift alone would not have.
 
 ---
 
+## 10. Scheduled sampling on the HMM: null, and the reason is structural
+
+**Pre-registered prediction:** fitting the Viterbi observation model against
+GPS truth with an annealed teacher (eps 1 -> 0) would beat the hand-set
+constants, most on the junction-dense sessions.
+
+**Result: no change at any duration.** Leave-one-session-out on `test`, TCN
+inner, 60 s fitting rollouts, 6 epochs, `results/schedule_fit.md`:
+
+| predictor | 10 s | 30 s | 60 s |
+|---|---|---|---|
+| `viterbi_base_model` | 59.5 | 164.5 | 312.4 |
+| `viterbi_fitted_model` | 59.5 | 164.5 | 312.4 |
+
+The search moved exactly one parameter, `sigma_turn_rad` 12.0 deg -> 11.0 deg
+on three of four folds, and moved nothing else off its default.
+
+### Where scheduled sampling does and does not attach here
+
+Checked before building, and both candidates were negative:
+
+- **The TCN is not autoregressive.** Its input is raw levelled sensor windows
+  at train and at inference alike; no predicted quantity ever enters it. There
+  is no teacher forcing to anneal away.
+- **The matcher's 10 s re-match is already free-running.** It snaps to its OWN
+  tracked position (`predictor.py`, `graph.position(pos)`), never to a fix,
+  and the emission reads the gyro, which is a live sensor during an outage.
+
+The one place with the structure scheduled sampling addresses is FITTING the
+observation model: the Viterbi state at step k+1 is conditioned on step k, so
+a teacher-forced fit never sees what a wrong branch costs three seconds later,
+while a free-running fit is noise until the parameters are roughly right.
+That is what `src/mapmatch/schedule_fit.py` implements. The implementation is
+sound; the data does not support the fit.
+
+### Why it is null: the branching happens below the layer being scored
+
+Measured on S-A6, 12 outages of 60 s: **`_successors` returns exactly one
+continuation on 933 of 962 steps (97%)**; two on 28, three on 1.
+
+`_choose_branches_soft` collapses to a single branch whenever there is one
+forward edge, or when no branch passes the 75 deg `max_turn_mismatch_rad`
+gate. So the fork decision is taken INSIDE the advance walk, by a hard gate,
+and the emission and transition terms almost never have a choice to score.
+
+Consequence, measured directly: sweeping each parameter to both ends of its
+full physical range changed the objective on **2 of 32 extreme settings**.
+It is not that the fit failed to find the optimum — over most of this data
+there is no gradient to follow, because the parameters do not affect the
+output at all.
+
+**This is the same fact behind the 3% Viterbi-over-greedy margin** already
+recorded: a decoder whose scoring terms are consulted on 3% of steps cannot
+differ much from the greedy tracker that skips them.
+
+### The one place it is not inert
+
+On S-A8, the junction-dense session (7.2 distinct roads per 60 s track,
+against 2.8 on S-A5), tightening `sigma_turn_rad` from 12 deg to 2 deg with a
+constant-velocity inner drops the fit objective **111.5 m -> 93.0 m (-17%)**.
+The effect is real; it is confined to routes that actually offer road choices,
+and the pooled three-session objective washes it out.
+
+**What this rules out:** tuning the HMM's observation model is not where the
+remaining drift is. **What it points at:** the branching gate
+(`max_turn_mismatch_rad`, and the collapse to `argmin` when nothing passes it)
+decides the route before the HMM is consulted. Moving that decision INTO the
+lattice -- forking on every plausible branch and letting the accumulated
+emission evidence choose -- is the change that would make the observation
+model, and therefore fitting it, matter. Not attempted.
+
+### Two guard bugs the tests caught
+
+- The normalised inverse-sigmoid schedule is S-shaped and **crosses linear at
+  the midpoint**; it is not uniformly slower. The original test asserted that
+  it was, which was false.
+- `epochs=1` returned eps=1, so a single-epoch fit would have reported a
+  **teacher-forced figure as if it were a drift measurement**. The last epoch
+  now always forces eps=0.
+
 ## Open
 
 - **Heading observability during an outage** — map matching or road-network
